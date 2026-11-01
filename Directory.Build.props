@@ -1,0 +1,25 @@
+<Project>
+  <PropertyGroup>
+    <!-- Version is the single source of truth; scripts/package.py reads it. -->
+    <Version>0.1.0.0</Version>
+    <AssemblyVersion>$(Version)</AssemblyVersion>
+    <FileVersion>$(Version)</FileVersion>
+    <InformationalVersion>0.1.0</InformationalVersion>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>NU1902;NU1903</WarningsNotAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!-- CA1303/CA1848/CA1873/CA2007/CA1062/CA1716/CA1707/CA1711/CA1056/CA1054/CA1002/CA1819/CA1031/CA2227/CA1305/CA1720/CA1724/CA1032/CA1064/CA1308/CA1034/CA1812/CA5351/CA2201/CA1849/CA1000/CA1861:
+         tuned off for a plugin (no public SDK surface, DTO-heavy, MD5 mandated by the Jellyfin manifest format). -->
+    <NoWarn>$(NoWarn);CA1303;CA1848;CA1873;CA2007;CA1062;CA1716;CA1707;CA1711;CA1056;CA1054;CA1002;CA1819;CA1031;CA2227;CA1305;CA1720;CA1724;CA1032;CA1064;CA1308;CA1034;CA1812;CA5351;CA2201;CA1849;CA1000;CA1861;CA2100;CA1310;CA1307;CA1309;CA1304;CA1311;CA1865;CA1866;CA1867;CA1859;CA1860;CA1851;CA1822;CA1852;CA1869;CA1823;CA1806;CA2234;CA1835;CA1510;CA1513;CA1512;CA1725;CA1721;CA1508;CA1416;CA1815;CA1051;CA1805;CA1863;CA1862</NoWarn>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

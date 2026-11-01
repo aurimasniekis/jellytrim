@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Jellytrim.Core/Jellytrim.Core.csproj" />
+    <Project Path="src/Jellyfin.Plugin.Jellytrim/Jellyfin.Plugin.Jellytrim.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Jellytrim.Core.Tests/Jellytrim.Core.Tests.csproj" />
+    <Project Path="tests/Jellyfin.Plugin.Jellytrim.Tests/Jellyfin.Plugin.Jellytrim.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Domain logic. MUST NOT reference Jellyfin assemblies: everything Jellyfin-specific goes through IMediaHost. -->
+  <PropertyGroup>
+    <RootNamespace>Jellytrim.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- At runtime both resolve from the Jellyfin host; see ADR-0003. -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+</Project>

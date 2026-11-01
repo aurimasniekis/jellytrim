@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Jellyfin.Plugin.Jellytrim</RootNamespace>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Jellyfin.Controller"><ExcludeAssets>runtime</ExcludeAssets></PackageReference>
+    <PackageReference Include="Jellyfin.Model"><ExcludeAssets>runtime</ExcludeAssets></PackageReference>
+    <PackageReference Include="Microsoft.Data.Sqlite.Core"><ExcludeAssets>runtime</ExcludeAssets></PackageReference>
+    <ProjectReference Include="..\Jellytrim.Core\Jellytrim.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Web\jellytrim.html" LogicalName="Jellytrim.Web.jellytrim.html" />
+    <!-- Produced by `npm run build` in web/; the Makefile orders this. -->
+    <EmbeddedResource Include="Web\jellytrim.js" LogicalName="Jellytrim.Web.jellytrim.js" />
+  </ItemGroup>
+</Project>

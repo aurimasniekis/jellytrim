@@ -1,0 +1,13 @@
+bin/
+obj/
+node_modules/
+/dist/
+/.e2e/
+/web/dist/
+/src/Jellyfin.Plugin.Jellytrim/Web/jellytrim.js
+/e2e/test-results/
+/e2e/playwright-report/
+*.user
+.DS_Store
+TestResults/
+coverage/
