@@ -34,10 +34,11 @@ public sealed class FakeHost : IMediaHost
 
     public IReadOnlyList<HostUser> GetUsers() => Users;
 
-    public HostItemPage ReadItemPage(Guid libraryId, int startIndex, int limit, IReadOnlyCollection<Guid> userIds)
+    public IReadOnlyList<Guid> ListItemIds(Guid libraryId) => Items.Values.Where(i => i.LibraryId == libraryId).OrderBy(i => i.Id).Select(i => i.Id).ToList();
+
+    public HostItemPage ReadItems(Guid libraryId, IReadOnlyList<Guid> itemIds, IReadOnlyCollection<Guid> userIds)
     {
-        var all = Items.Values.Where(i => i.LibraryId == libraryId).OrderBy(i => i.Id).ToList();
-        var page = all.Skip(startIndex).Take(limit).ToList();
+        var page = itemIds.Select(i => Items.GetValueOrDefault(i)).OfType<HostItem>().ToList();
         var states = new Dictionary<(Guid, Guid), UserItemState>();
         foreach (var item in page)
         {
@@ -50,7 +51,7 @@ public sealed class FakeHost : IMediaHost
             }
         }
 
-        return new HostItemPage { Items = page, TotalCount = all.Count, States = states, FailedUsers = userIds.Where(FailUserRead.Contains).ToList() };
+        return new HostItemPage { Items = page, States = states, FailedUsers = userIds.Where(FailUserRead.Contains).ToList() };
     }
 
     public HostItem? GetItem(Guid itemId) => Items.GetValueOrDefault(itemId);

@@ -89,6 +89,27 @@ public class NativeFileProbeTests : IDisposable
     }
 }
 
+public class VolumeProbeTests
+{
+    [Fact]
+    public void Reports_plausible_capacity_matching_df()
+    {
+        var measured = new Jellytrim.Core.Inventory.NativeVolumeProbe().Measure(Path.GetTempPath());
+        Assert.NotNull(measured);
+        Assert.True(measured.Value.Total > 0 && measured.Value.Free >= 0 && measured.Value.Free <= measured.Value.Total);
+
+        var df = new System.Diagnostics.ProcessStartInfo("df", ["-k", Path.GetTempPath()]) { RedirectStandardOutput = true };
+        using var process = System.Diagnostics.Process.Start(df)!;
+        var line = process.StandardOutput.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries)[^1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var totalKb = long.Parse(line[1], System.Globalization.CultureInfo.InvariantCulture);
+        Assert.InRange(measured.Value.Total / 1024.0 / totalKb, 0.95, 1.05);
+    }
+
+    [Fact]
+    public void Unreachable_path_is_null_not_zero() =>
+        Assert.Null(new Jellytrim.Core.Inventory.NativeVolumeProbe().Measure("/nonexistent-" + Guid.NewGuid()));
+}
+
 public class PathGuardTests : IDisposable
 {
     private readonly string _base;

@@ -1,0 +1,13 @@
+# Disposable test server. Only ever mounts generated fixtures from .e2e/run. Never point this at real media.
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:12.4.20261026-211555
+    container_name: jellytrim-e2e
+    ports:
+      - "${JELLYTRIM_E2E_PORT:-18096}:8096"
+    volumes:
+      - ../.e2e/run/config:/config
+      - ../.e2e/run/cache:/cache
+      - ../.e2e/run/media:/media
+    environment:
+      - JELLYFIN_LOG_DIR=/config/log

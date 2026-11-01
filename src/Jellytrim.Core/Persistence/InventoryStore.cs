@@ -26,6 +26,8 @@ public sealed record ItemStateRow(Guid UserId, string UserName, WatchState State
 
 public sealed record SnapshotPoint(DateTime TakenUtc, string ScopeId, string ScopeName, long LogicalBytes, long UniqueBytes, long AllocatedBytes, long? FreeBytes, long? TotalBytes);
 
+public sealed record LargestFile(string Path, long Size, long AllocatedBytes, int LinkCount, Guid ItemId, string ItemName, MediaKind Kind);
+
 public sealed record WatchSummary(Guid LibraryId, int Items, long PlayedByAllBytes, int PlayedByAllItems, long PlayedBySomeBytes, int PlayedBySomeItems, long UnplayedBytes, int UnplayedItems, long UnknownBytes, int UnknownItems);
 
 /// <summary>Inventory reads and writes. All observation data is advisory: execution re-reads the filesystem and the server.</summary>
@@ -422,6 +424,14 @@ public sealed class InventoryStore(JellytrimDb db)
             FROM t GROUP BY lib
             """).Rows(r => new WatchSummary(Guid.Parse(r.GetString(0)), r.GetInt32(1), r.GetInt64(2), r.GetInt32(3), r.GetInt64(4), r.GetInt32(5), r.GetInt64(6), r.GetInt32(7), r.GetInt64(8), r.GetInt32(9)));
     });
+
+    public IReadOnlyList<LargestFile> LargestFiles(int limit) => db.Read(c =>
+        c.Cmd("""
+            SELECT f.path,f.size,f.allocated,f.link_count,i.item_id,i.name,i.kind FROM files f
+            JOIN item_files x ON x.file_key=f.file_key JOIN items i ON i.item_key=x.item_key
+            WHERE f.status=0 GROUP BY f.file_key ORDER BY f.size DESC LIMIT $l
+            """).With("$l", limit)
+            .Rows(r => new LargestFile(r.GetString(0), r.GetInt64(1), r.GetInt64(2), r.GetInt32(3), Guid.Parse(r.GetString(4)), r.GetString(5), (MediaKind)r.GetInt32(6))));
 
     public static string Normalize(string text) => text.ToLowerInvariant();
 

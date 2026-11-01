@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Jellytrim.Core.Abstractions;
 using Jellytrim.Core.Domain;
 using Jellytrim.Core.FileSystem;
@@ -13,16 +14,39 @@ public interface IVolumeProbe
     (long Total, long Free)? Measure(string path);
 }
 
-public sealed class DriveInfoVolumeProbe : IVolumeProbe
+/// <summary>
+/// Observed volume capacity. On Linux this calls statvfs directly: .NET's DriveInfo multiplies block counts by f_bsize,
+/// which reported 254 TB for a 994 GB volume on a filesystem where f_bsize is not f_frsize (observed on virtiofs).
+/// POSIX defines those counts in units of f_frsize.
+/// </summary>
+public sealed unsafe partial class NativeVolumeProbe : IVolumeProbe
 {
+    [LibraryImport("libc", EntryPoint = "statvfs", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int StatvfsNative(string path, byte* buffer);
+
     public (long Total, long Free)? Measure(string path)
     {
         try
         {
+            if (OperatingSystem.IsLinux() && IntPtr.Size == 8)
+            {
+                // 64-bit Linux layout: f_bsize, f_frsize, f_blocks, f_bfree, f_bavail, each 8 bytes.
+                byte* buffer = stackalloc byte[256];
+                if (StatvfsNative(path, buffer) != 0)
+                {
+                    return null;
+                }
+
+                var fragment = *(ulong*)(buffer + 8);
+                var blocks = *(ulong*)(buffer + 16);
+                var available = *(ulong*)(buffer + 32);
+                return ((long)(blocks * fragment), (long)(available * fragment));
+            }
+
             var drive = new DriveInfo(path);
             return (drive.TotalSize, drive.AvailableFreeSpace);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or DllNotFoundException or EntryPointNotFoundException)
         {
             return null;
         }
@@ -166,29 +190,21 @@ public sealed class InventoryScanner(
                 var complete = true;
                 try
                 {
-                    var start = 0;
-                    while (true)
+                    var ids = host.ListItemIds(library.Id);
+                    var offlineRoots = offline.Select(o => o.Path).ToList();
+                    var done = 0;
+                    foreach (var batch in ids.Chunk(PageSize))
                     {
                         token.ThrowIfCancellationRequested();
-                        var page = host.ReadItemPage(library.Id, start, PageSize, userIds);
-                        if (page.Items.Count == 0)
-                        {
-                            break;
-                        }
-
+                        var page = host.ReadItems(library.Id, batch, userIds);
                         failedUsers.UnionWith(page.FailedUsers);
-                        var offlineRoots = offline.Select(o => o.Path).ToList();
                         var scanned = await ProbeAsync(page.Items, offlineRoots, token).ConfigureAwait(false);
                         inventory.WritePage(scanned, page, userIds, generation, clock.GetUtcNow().UtcDateTime);
                         items += scanned.Count;
                         files += scanned.Sum(s => s.Files.Count);
                         ItemsSeen = items;
-                        start += page.Items.Count;
-                        progress?.Report((index + ((double)Math.Min(start, page.TotalCount) / Math.Max(1, page.TotalCount))) / libraries.Count * 100);
-                        if (start >= page.TotalCount)
-                        {
-                            break;
-                        }
+                        done += batch.Length;
+                        progress?.Report((index + ((double)done / Math.Max(1, ids.Count))) / libraries.Count * 100);
                     }
                 }
                 catch (TimeoutException)

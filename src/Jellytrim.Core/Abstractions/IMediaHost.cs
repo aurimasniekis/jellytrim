@@ -9,8 +9,11 @@ public interface IMediaHost
 
     IReadOnlyList<HostUser> GetUsers();
 
-    /// <summary>Reads one page of a library's movies, series, seasons and episodes, ordered stably, with state for the given users.</summary>
-    HostItemPage ReadItemPage(Guid libraryId, int startIndex, int limit, IReadOnlyCollection<Guid> userIds);
+    /// <summary>Snapshots every movie, series, season and episode id in a library. Paging by id stays stable while the library changes.</summary>
+    IReadOnlyList<Guid> ListItemIds(Guid libraryId);
+
+    /// <summary>Reads a bounded batch of items with state for the given users. Alternate versions are folded into their primary.</summary>
+    HostItemPage ReadItems(Guid libraryId, IReadOnlyList<Guid> itemIds, IReadOnlyCollection<Guid> userIds);
 
     /// <summary>Reads the current server view of one item, or null when the server no longer knows it.</summary>
     HostItem? GetItem(Guid itemId);
@@ -83,8 +86,6 @@ public sealed class HostItem
 public sealed class HostItemPage
 {
     public required IReadOnlyList<HostItem> Items { get; init; }
-
-    public required int TotalCount { get; init; }
 
     /// <summary>Non-default state only. Absence means Unplayed and not favorite, for users not listed in <see cref="FailedUsers"/>.</summary>
     public required IReadOnlyDictionary<(Guid ItemId, Guid UserId), UserItemState> States { get; init; }

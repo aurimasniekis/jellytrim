@@ -97,6 +97,10 @@ public sealed class CleanupPlanner(
             }
         }
 
+        // A sibling that is itself in this plan is not left behind, so it should not be reported as a neighbor.
+        var plannedPaths = items.SelectMany(i => i.Files.Select(f => f.Path).Concat(i.DirectoriesIfEmpty)).ToHashSet(StringComparer.Ordinal);
+        items = items.Select(i => i with { UnplannedNeighbors = i.UnplannedNeighbors.Where(n => !plannedPaths.Contains(n)).ToList() }).ToList();
+
         var containers = request.IncludeSidecars ? BuildContainers(items, input, guard) : [];
         var allFiles = items.SelectMany(i => i.Files).Concat(containers.SelectMany(c => c.Files)).ToList();
         var estimate = StorageAccounting.Estimate(allFiles.Select(f => new FileRef(f.Path, f.Identity, f.Size, f.AllocatedBytes, f.LinkCount)));
@@ -345,6 +349,7 @@ public sealed class CleanupPlanner(
     private List<PlanContainer> BuildContainers(IReadOnlyList<PlanItem> items, EvaluationInput input, PathGuard guard)
     {
         var inPlan = items.Select(i => i.ItemId).ToHashSet();
+        var planned = items.SelectMany(i => i.Files.Select(f => f.Path).Concat(i.DirectoriesIfEmpty)).ToHashSet(StringComparer.Ordinal);
         var episodes = input.Leaves.Where(l => l.Kind == MediaKind.Episode && l.Health != ItemHealth.NotFileBacked).ToList();
         var containers = new List<PlanContainer>();
 
@@ -372,11 +377,11 @@ public sealed class CleanupPlanner(
                     try
                     {
                         var scan = SidecarDiscovery.DiscoverContainerArtwork(record.Path);
-                        neighbors.AddRange(scan.Unplanned.Where(u => !items.Any(i => i.Files.Any(f => f.Path == u)) && !items.Any(i => i.DirectoriesIfEmpty.Contains(u))));
+                        neighbors.AddRange(scan.Unplanned.Where(u => !planned.Contains(u)));
                         foreach (var path in scan.Sidecars)
                         {
                             var observation = probe.Probe(path);
-                            if (guard.CheckDeletableFile(path, observation).IsSafe && observation.Identity is not null && !items.Any(i => i.Files.Any(f => f.Path == path)))
+                            if (guard.CheckDeletableFile(path, observation).IsSafe && observation.Identity is not null && !planned.Contains(path))
                             {
                                 files.Add(ToPlanFile(path, FileRole.Sidecar, observation));
                             }
