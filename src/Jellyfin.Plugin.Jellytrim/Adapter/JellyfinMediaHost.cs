@@ -243,7 +243,9 @@ public sealed class JellyfinMediaHost(
                 var batch = userData.GetUserDataBatch(all, user);
                 foreach (var (item, versions) in groups)
                 {
-                    var merged = Merge(item, versions.Select(v => batch.GetValueOrDefault(v.Id)).OfType<UserItemData>());
+                    var rows = versions.Select(v => batch.GetValueOrDefault(v.Id)).OfType<UserItemData>()
+                        .Select(r => new UserStateRow(r.Played, r.PlaybackPositionTicks, r.PlayCount, r.LastPlayedDate, r.IsFavorite));
+                    var merged = UserStateMerge.Merge(item is Folder, rows);
                     if (!merged.IsDefault)
                     {
                         states[(item.Id, userId)] = merged;
@@ -258,33 +260,5 @@ public sealed class JellyfinMediaHost(
         }
 
         return (states, failed);
-    }
-
-    /// <summary>Any version in progress wins, then any played version. A resume position must keep protecting the item.</summary>
-    private static UserItemState Merge(BaseItem item, IEnumerable<UserItemData> data)
-    {
-        var rows = data.ToList();
-        if (rows.Count == 0)
-        {
-            return UserItemState.Default;
-        }
-
-        var favorite = rows.Any(r => r.IsFavorite);
-        if (item is Folder)
-        {
-            // Jellyfin's Played flag on a series or season is derived. jellytrim derives its own from episodes, so only favorites apply here.
-            return new UserItemState(WatchState.Unplayed, IsFavorite: favorite);
-        }
-
-        var state = rows.Any(r => !r.Played && r.PlaybackPositionTicks > 0) ? WatchState.Partial
-            : rows.Any(r => r.Played) ? WatchState.Played
-            : WatchState.Unplayed;
-        var lastPlayed = rows.Select(r => r.LastPlayedDate).Max();
-        return new UserItemState(
-            state,
-            rows.Max(r => r.PlaybackPositionTicks),
-            rows.Sum(r => r.PlayCount),
-            lastPlayed is { } at ? DateTime.SpecifyKind(at, DateTimeKind.Utc) : null,
-            favorite);
     }
 }

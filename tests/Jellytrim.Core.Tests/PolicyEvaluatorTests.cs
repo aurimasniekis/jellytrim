@@ -444,4 +444,37 @@ public class PolicyEvaluatorTests
         Assert.NotEmpty(relative.Validate());
         Assert.Empty(Policy(Ann).Validate());
     }
+
+    [Fact]
+    public void A_rewatch_is_in_progress_even_with_the_played_flag_set()
+    {
+        var merged = UserStateMerge.Merge(false, [new UserStateRow(true, 1_000_000, 2, Now, false)]);
+        Assert.Equal(WatchState.Partial, merged.State);
+    }
+
+    [Fact]
+    public void Any_version_in_progress_outranks_a_played_version()
+    {
+        var merged = UserStateMerge.Merge(false, [new UserStateRow(true, 0, 1, Now.AddDays(-9), false), new UserStateRow(false, 50, 0, Now, true)]);
+        Assert.Equal(WatchState.Partial, merged.State);
+        Assert.Equal(1, merged.PlayCount);
+        Assert.Equal(Now, merged.LastPlayedUtc);
+        Assert.True(merged.IsFavorite);
+    }
+
+    [Fact]
+    public void Played_on_any_version_counts_and_no_rows_is_default()
+    {
+        Assert.Equal(WatchState.Played, UserStateMerge.Merge(false, [new UserStateRow(false, 0, 0, null, false), new UserStateRow(true, 0, 1, null, false)]).State);
+        Assert.True(UserStateMerge.Merge(false, []).IsDefault);
+    }
+
+    [Fact]
+    public void Containers_keep_only_favorites()
+    {
+        var merged = UserStateMerge.Merge(true, [new UserStateRow(true, 10, 3, Now, true)]);
+        Assert.Equal(WatchState.Unplayed, merged.State);
+        Assert.True(merged.IsFavorite);
+        Assert.Equal(0, merged.PlayCount);
+    }
 }

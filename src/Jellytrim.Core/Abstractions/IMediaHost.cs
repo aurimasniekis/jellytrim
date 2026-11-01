@@ -116,3 +116,35 @@ public sealed record ActivePlayback(IReadOnlySet<Guid> ItemIds, IReadOnlySet<str
 {
     public static readonly ActivePlayback None = new(new HashSet<Guid>(), new HashSet<string>());
 }
+
+public sealed record UserStateRow(bool Played, long PositionTicks, int PlayCount, DateTime? LastPlayed, bool IsFavorite);
+
+/// <summary>Folds Jellyfin's per-version rows into one state for an item.</summary>
+public static class UserStateMerge
+{
+    /// <summary>
+    /// A saved resume position always means in progress, even when the Played flag is also set: that combination is a
+    /// rewatch, and someone part-way through something must keep protecting it. Otherwise any played version means Played.
+    /// On a series or season Jellyfin's Played flag is derived, so only favorites are taken from those.
+    /// </summary>
+    public static UserItemState Merge(bool isContainer, IEnumerable<UserStateRow> versions)
+    {
+        var rows = versions.ToList();
+        if (rows.Count == 0)
+        {
+            return UserItemState.Default;
+        }
+
+        var favorite = rows.Any(r => r.IsFavorite);
+        if (isContainer)
+        {
+            return new UserItemState(WatchState.Unplayed, IsFavorite: favorite);
+        }
+
+        var state = rows.Any(r => r.PositionTicks > 0) ? WatchState.Partial
+            : rows.Any(r => r.Played) ? WatchState.Played
+            : WatchState.Unplayed;
+        var lastPlayed = rows.Select(r => r.LastPlayed).Max();
+        return new UserItemState(state, rows.Max(r => r.PositionTicks), rows.Sum(r => r.PlayCount), lastPlayed is { } at ? DateTime.SpecifyKind(at, DateTimeKind.Utc) : null, favorite);
+    }
+}
