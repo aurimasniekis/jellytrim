@@ -1,0 +1,10 @@
+{
+  "name": "Watched by everyone, 60 days ago",
+  "participatingUserIds": ["<user-id-1>", "<user-id-2>"],
+  "watched": "AllSelected",
+  "minDaysSinceLastWatched": 60,
+  "keepAddedWithinDays": 30,
+  "favoriteProtection": "AllKnownUsers",
+  "inProgressProtection": "AllKnownUsers",
+  "mediaKinds": ["Movie", "Episode"]
+}

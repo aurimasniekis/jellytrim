@@ -1,0 +1,8 @@
+{
+  "name": "Finished shows only",
+  "participatingUserIds": ["<user-id-1>", "<user-id-2>"],
+  "watched": "AllSelected",
+  "minDaysSinceLastWatched": 180,
+  "unit": "CompleteShow",
+  "mediaKinds": ["Episode"]
+}

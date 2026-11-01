@@ -1,0 +1,34 @@
+name: Release
+# Builds and publishes on a version tag. The tag must match Directory.Build.props, for example v0.1.0.0.
+on:
+  push:
+    tags: ['v*.*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Check the tag matches the version
+        run: |
+          version=$(grep -oE '<Version>[0-9.]+' Directory.Build.props | cut -d'>' -f2)
+          test "v$version" = "$GITHUB_REF_NAME"
+      - run: cd web && npm ci --no-audit --no-fund && npm run build && npm test
+      - run: dotnet restore Jellytrim.slnx --locked-mode
+      - run: dotnet build Jellytrim.slnx -c Release --no-restore
+      - run: dotnet test Jellytrim.slnx -c Release --no-build
+      - run: python3 scripts/package.py --source-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/jellytrim_${GITHUB_REF_NAME#v}.zip"
+      - run: gh release create "$GITHUB_REF_NAME" --draft --title "jellytrim $GITHUB_REF_NAME" --notes-file CHANGELOG.md dist/*.zip dist/manifest.json dist/SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}

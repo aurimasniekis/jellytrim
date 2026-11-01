@@ -1,0 +1,9 @@
+{
+  "name": "Daily shows: keep the newest 5",
+  "participatingUserIds": ["<user-id-1>"],
+  "watched": "AnySelected",
+  "keepNewestEpisodesPerShow": 5,
+  "includedLibraryIds": ["<library-id>"],
+  "excludedTags": ["keep"],
+  "mediaKinds": ["Episode"]
+}

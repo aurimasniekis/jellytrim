@@ -1,0 +1,71 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: cd web && npm ci --no-audit --no-fund && npm run check && npm run build && npm test
+      - run: dotnet restore Jellytrim.slnx --locked-mode
+      - run: dotnet format Jellytrim.slnx --verify-no-changes --no-restore
+      - run: dotnet build Jellytrim.slnx -c Release --no-restore
+      - run: dotnet test Jellytrim.slnx -c Release --no-build
+      - run: python3 scripts/package.py
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dist
+          path: dist/
+
+  dependency-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: dotnet list Jellytrim.slnx package --vulnerable --include-transitive | tee audit.txt && ! grep -qE "Critical|High" audit.txt
+      - run: cd web && npm ci --no-audit --no-fund && npm audit
+      - run: cd e2e && npm ci --no-audit --no-fund && npm audit
+
+  e2e:
+    needs: build-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: cd web && npm ci --no-audit --no-fund && npm run build
+      - run: dotnet build src/Jellyfin.Plugin.Jellytrim -c Release
+      - run: python3 scripts/package.py
+      - run: python3 e2e/env.py up
+      - run: cd e2e && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium && npx playwright test
+      - if: always()
+        run: docker logs jellytrim-e2e 2>&1 | tail -200
+      - if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-results
+          path: e2e/test-results/
