@@ -64,6 +64,10 @@ test('settings, policies, jobs and audit survive a server restart, and the plugi
     expect(status.activeJobId).toBeNull();
     expect((await (await request.get(`${state.base}/Jellytrim/Jobs`, { headers: auth() })).json()).total).toBe(jobsBefore);
     expect((await (await request.get(`${state.base}/Jellytrim/Policies`, { headers: auth() })).json()).length).toBeGreaterThan(0);
+
+    // A graceful stop must not take the server process down with an unhandled exception from the plugin.
+    const logs = execFileSync('docker', ['logs', 'jellytrim-e2e'], { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'pipe'] });
+    expect(logs).not.toContain('Unhandled exception');
 });
 
 test('a job killed mid-run is finalized as Interrupted on restart and never resumed', async ({ request }) => {

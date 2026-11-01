@@ -209,7 +209,7 @@ public sealed class JellyfinMediaHost(
             DateAddedUtc = item.DateCreated.Year > 1970 ? DateTime.SpecifyKind(item.DateCreated, DateTimeKind.Utc) : null,
             PremiereDateUtc = item.PremiereDate is { } premiere ? DateTime.SpecifyKind(premiere, DateTimeKind.Utc) : null,
             RuntimeTicks = item.RunTimeTicks,
-            Tags = item.Tags ?? [],
+            Tags = item.GetInheritedTags(), // A tag on a show, season or library applies to what is below it.
             Path = item.Path,
             Files = files,
             IsFileBacked = fileBacked,

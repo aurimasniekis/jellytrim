@@ -72,6 +72,7 @@ public sealed class CleanupCoordinator(
     private readonly CancellationTokenSource _shutdown = new();
     private readonly object _lock = new();
     private Task _running = Task.CompletedTask;
+    private int _disposed;
 
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
 
@@ -160,13 +161,16 @@ public sealed class CleanupCoordinator(
             Status = JobStatus.Queued,
             CreatedBy = actor,
             CreatedAtUtc = Now,
-            TotalItems = plan.Items.Count,
+            TotalItems = plan.Items.Count + plan.Containers.Count,
             ReclaimEstimateBytes = plan.Totals.EstimatedReclaimableBytes,
         };
 
         try
         {
-            cleanup.InsertJob(job, request.IdempotencyKey, plan.Items.Select(i => (new PlanJobEntry(i.ItemId, i.Name), i.Files)).ToList());
+            var entries = plan.Items.Select(i => (new PlanJobEntry(i.ItemId, i.Name), i.Files))
+                .Concat(plan.Containers.Select(c => (new PlanJobEntry(c.ItemId, $"{c.Name} (folder artwork and record)"), c.Files)))
+                .ToList();
+            cleanup.InsertJob(job, request.IdempotencyKey, entries);
         }
         catch (SqliteException e) when (e.SqliteErrorCode == 19)
         {
@@ -245,8 +249,14 @@ public sealed class CleanupCoordinator(
         }
     }
 
+    /// <summary>Safe to call twice: the host's StopAsync and then the DI container both dispose this.</summary>
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
         await _shutdown.CancelAsync().ConfigureAwait(false);
         try
         {
@@ -318,6 +328,8 @@ public sealed class CleanupCoordinator(
                 break;
             }
 
+            // An administrator may remove a root or edit the policy during a long job, and that must take effect at once.
+            context.Refresh();
             var item = plan.Items[seq];
             var live = host.ReadLiveStates(StateIds(item), context.LiveUserIds);
             var problem = context.Validate(item, live, host.GetActivePlayback());
@@ -332,7 +344,7 @@ public sealed class CleanupCoordinator(
             if (ExecuteItem(job.Id, seq, item, context))
             {
                 deleted.Add(item.ItemId);
-                deleted.AddRange(item.SharedRecordIds);
+                deleted.AddRange(item.SharedRecords.Select(r => r.ItemId));
             }
             else
             {
@@ -340,13 +352,19 @@ public sealed class CleanupCoordinator(
             }
         }
 
+        var deletedItems = plan.Items.Count(i => deleted.Contains(i.ItemId));
         if (cancelled)
         {
             cleanup.MarkRemainingItems(job.Id, ItemStatus.Cancelled, Now);
         }
         else
         {
-            issues += ExecuteContainers(plan, deleted, context);
+            issues += ExecuteContainers(job.Id, plan, deleted, context);
+            cancelled = cleanup.IsCancelRequested(job.Id) && cleanup.ItemsInStatus(job.Id, ItemStatus.Pending).Count > 0;
+            if (cancelled)
+            {
+                cleanup.MarkRemainingItems(job.Id, ItemStatus.Cancelled, Now);
+            }
         }
 
         inventory.RemoveItems(deleted);
@@ -355,12 +373,12 @@ public sealed class CleanupCoordinator(
         inventory.WriteSnapshot(Now);
         var status = cancelled ? JobStatus.Cancelled : issues > 0 ? JobStatus.CompletedWithIssues : JobStatus.Completed;
         var message = cancelled
-            ? $"Cancelled. {deleted.Count} item(s) were already permanently deleted and cannot be restored; the rest were not touched."
-            : issues > 0 ? $"{deleted.Count} item(s) deleted, {issues} with issues. Review the report." : $"{deleted.Count} item(s) permanently deleted.";
+            ? $"Cancelled. {deletedItems} item(s) were already permanently deleted and cannot be restored; the rest were not touched."
+            : issues > 0 ? $"{deletedItems} item(s) deleted, {issues} with issues. Review the report." : $"{deletedItems} item(s) permanently deleted.";
         cleanup.SetJobStatus(job.Id, status, Now, message, finished: true);
         cleanup.SetPlanStatus(plan.Id, CleanupStore.PlanExecuted);
-        audit.Record(Now, job.CreatedBy, "job.finished", job.Id.ToString("N"), job.CorrelationId, status, Json.Write(new { deleted = deleted.Count, issues }));
-        logger.LogInformation("jellytrim job finished {JobId} {JobStatus} {DeletedItems} {Issues} {CorrelationId}", job.Id, status, deleted.Count, issues, job.CorrelationId);
+        audit.Record(Now, job.CreatedBy, "job.finished", job.Id.ToString("N"), job.CorrelationId, status, Json.Write(new { deleted = deletedItems, issues }));
+        logger.LogInformation("jellytrim job finished {JobId} {JobStatus} {DeletedItems} {Issues} {CorrelationId}", job.Id, status, deletedItems, issues, job.CorrelationId);
     }
 
     private static List<Guid> StateIds(PlanItem item)
@@ -374,6 +392,20 @@ public sealed class CleanupCoordinator(
         if (item.SeriesId is { } series)
         {
             ids.Add(series);
+        }
+
+        foreach (var shared in item.SharedRecords)
+        {
+            ids.Add(shared.ItemId);
+            if (shared.SeasonId is { } sharedSeason)
+            {
+                ids.Add(sharedSeason);
+            }
+
+            if (shared.SeriesId is { } sharedSeries)
+            {
+                ids.Add(sharedSeries);
+            }
         }
 
         return ids;
@@ -442,9 +474,9 @@ public sealed class CleanupCoordinator(
         try
         {
             host.RemoveItemRecord(item.ItemId);
-            foreach (var other in item.SharedRecordIds)
+            foreach (var other in item.SharedRecords)
             {
-                host.RemoveItemRecord(other);
+                host.RemoveItemRecord(other.ItemId);
             }
         }
         catch (Exception e)
@@ -496,34 +528,75 @@ public sealed class CleanupCoordinator(
         return (FileStatus.Deleted, null);
     }
 
-    private int ExecuteContainers(CleanupPlan plan, List<Guid> deleted, ValidationContext context)
+    /// <summary>Seasons and shows, tracked with the same durable per-file records as items, and run only after every child succeeded.</summary>
+    private int ExecuteContainers(Guid job, CleanupPlan plan, List<Guid> deleted, ValidationContext context)
     {
         var done = deleted.ToHashSet();
         var issues = 0;
 
         // Seasons first, so an emptied season folder is gone by the time its show is checked.
-        foreach (var container in plan.Containers.OrderBy(c => c.Kind == MediaKind.Series))
+        var ordered = plan.Containers.Select((c, index) => (Container: c, Seq: plan.Items.Count + index)).OrderBy(c => c.Container.Kind == MediaKind.Series).ToList();
+        foreach (var (container, seq) in ordered)
         {
+            context.Refresh();
+            if (_shutdown.IsCancellationRequested || cleanup.IsCancelRequested(job) || !context.DeletionEnabled)
+            {
+                break; // Whatever remains is marked by the caller.
+            }
+
+            void Keep(string code, string message)
+            {
+                cleanup.SetItem(job, seq, ItemStatus.Skipped, Now, code, message, finished: true);
+                cleanup.MarkFilesNotAttempted(job, seq, Now);
+            }
+
             if (!container.ChildItemIds.All(done.Contains))
             {
+                Keep("CHILD_NOT_DELETED", "Kept, because not all of its episodes were deleted.");
                 continue;
             }
 
-            foreach (var file in container.Files)
+            // Checked before touching anything: artwork must not go from a show that is staying.
+            bool hasChildren;
+            try
             {
-                var observation = probe.Probe(file.Path);
-                if (observation.Status == ProbeStatus.Ok && context.Guard.CheckDeletableFile(file.Path, observation).IsSafe && ValidationContext.ChangeOf(file, observation) is null)
+                hasChildren = host.HasChildren(container.ItemId);
+            }
+            catch (Exception e)
+            {
+                logger.LogWarning(e, "jellytrim could not read children of {ItemId}", container.ItemId);
+                Keep("CHILDREN_UNKNOWN", "Kept, because what remains below it could not be read.");
+                issues++;
+                continue;
+            }
+
+            if (hasChildren)
+            {
+                Keep("CONTAINER_NOT_EMPTY", "Kept, because the server still has other items below it.");
+                continue;
+            }
+
+            cleanup.SetItem(job, seq, ItemStatus.InProgress, Now, started: true);
+            long freed = 0;
+            string? failure = null;
+            for (var f = 0; f < container.Files.Count; f++)
+            {
+                var (status, code) = DeleteOne(job, seq, f, container.Files[f], context);
+                if (status == FileStatus.Deleted)
                 {
-                    try
-                    {
-                        deleter.DeleteFile(file.Path);
-                    }
-                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                    {
-                        issues++;
-                        logger.LogWarning("jellytrim could not delete container artwork {ItemId} {ErrorType}", container.ItemId, e.GetType().Name);
-                    }
+                    freed += container.Files[f].EstimatedFreedBytes;
                 }
+                else if (status != FileStatus.AlreadyGone)
+                {
+                    failure ??= code;
+                }
+            }
+
+            if (failure is not null)
+            {
+                issues++;
+                cleanup.SetItem(job, seq, ItemStatus.Failed, Now, failure, "Some folder artwork could not be deleted. See its files. The record was left in place.", freed, finished: true);
+                continue;
             }
 
             foreach (var directory in container.DirectoriesIfEmpty)
@@ -534,20 +607,20 @@ public sealed class CleanupCoordinator(
                 }
             }
 
+            var reconcile = "Removed";
             try
             {
-                // Only an empty record is removed. Virtual episodes or anything else below it keep the container.
-                if (!host.HasChildren(container.ItemId))
-                {
-                    host.RemoveItemRecord(container.ItemId);
-                    done.Add(container.ItemId);
-                    deleted.Add(container.ItemId);
-                }
+                host.RemoveItemRecord(container.ItemId);
+                done.Add(container.ItemId);
+                deleted.Add(container.ItemId);
             }
             catch (Exception e)
             {
                 logger.LogWarning(e, "jellytrim could not reconcile container {ItemId}", container.ItemId);
+                reconcile = "PendingNextLibraryScan";
             }
+
+            cleanup.SetItem(job, seq, ItemStatus.Deleted, Now, freed: freed, reconcile: reconcile, finished: true);
         }
 
         return issues;
@@ -564,25 +637,34 @@ public sealed class CleanupCoordinator(
         private readonly IReadOnlyList<HostUser> _users;
         private readonly HashSet<Guid> _liveUsers;
         private readonly CleanupPolicy _policy;
-        private readonly JellytrimSettings _settings;
-        private readonly bool _policyChanged;
         private readonly Dictionary<Guid, IReadOnlyList<LeafItem>> _siblings = [];
+        private bool _policyChanged;
 
         public ValidationContext(CleanupCoordinator owner, CleanupPlan plan)
         {
             _owner = owner;
-            _settings = owner.Settings.Get().Value;
             _users = owner.Host.GetUsers();
             _liveUsers = _users.Select(u => u.Id).ToHashSet();
             _policy = plan.Policy;
-            var locations = owner.Host.GetLibraries().SelectMany(l => l.Locations).ToList();
-            Guard = new PathGuard(_settings.ApprovedRoots.Where(r => locations.Contains(r, StringComparer.Ordinal)));
-            _policyChanged = plan.Policy.Id != Guid.Empty && owner.Policies.Get(plan.Policy.Id)?.Revision != plan.Policy.Revision;
+            Guard = new PathGuard([]);
+            Refresh();
         }
 
-        public PathGuard Guard { get; }
+        public PathGuard Guard { get; private set; }
+
+        public bool DeletionEnabled { get; private set; }
 
         public IReadOnlyCollection<Guid> LiveUserIds => _liveUsers;
+
+        /// <summary>Re-reads what an administrator can change during a job: deletion enabled, approved roots, library locations, the policy.</summary>
+        public void Refresh()
+        {
+            var settings = _owner.Settings.Get().Value;
+            var locations = _owner.Host.GetLibraries().SelectMany(l => l.Locations).ToList();
+            DeletionEnabled = settings.DeletionEnabled;
+            Guard = new PathGuard(settings.ApprovedRoots.Where(r => locations.Contains(r, StringComparer.Ordinal)), otherRoots: locations);
+            _policyChanged = _policy.Id != Guid.Empty && _owner.Policies.Get(_policy.Id)?.Revision != _policy.Revision;
+        }
 
         public static string? ChangeOf(PlanFile file, FileObservation observed)
         {
@@ -608,7 +690,7 @@ public sealed class CleanupCoordinator(
         {
             JobProblem Problem(string code, string message) => new(item.ItemId, item.Name, code, message);
 
-            if (!_owner.Settings.Get().Value.DeletionEnabled)
+            if (!DeletionEnabled)
             {
                 return Problem(ErrorCodes.DeletionDisabled, "Deletion was disabled after this plan was made.");
             }
@@ -650,55 +732,70 @@ public sealed class CleanupCoordinator(
                 }
             }
 
-            var evaluation = PolicyEvaluator.Evaluate(_policy, new EvaluationInput
+            var paths = item.Files.Where(f => f.Role != FileRole.Sidecar).Select(f => f.Path).ToList();
+            var self = new SharedRecord(item.ItemId, item.Kind, item.Name, item.LibraryId, item.SeriesId, item.SeasonId, item.SeasonNumber, item.EpisodeNumber);
+            foreach (var target in item.SharedRecords.Prepend(self))
             {
-                Leaves = LeavesFor(item),
-                NowUtc = _owner.Now,
-                KnownUsers = _users.Select(u => u.Id).ToList(),
-                ReadableUsers = _liveUsers,
-                States = live,
-                ProtectedIds = _owner.Policies.ProtectedIds(),
-                Playback = playback,
-                EvaluateUnit = false,
-                PathComparison = PathGuard.PlatformComparison,
-                UserCanAccessLibrary = (user, library) => _users.FirstOrDefault(u => u.Id == user)?.CanAccess(library) ?? false,
-            }).Items.GetValueOrDefault(item.ItemId);
+                if (target.ItemId != item.ItemId)
+                {
+                    var other = _owner.Host.GetItem(target.ItemId);
+                    if (other is null || !media.SetEquals(other.Files.Select(f => f.Path)))
+                    {
+                        return Problem("ITEM_CHANGED", "Another record sharing these files changed.");
+                    }
+                }
 
-            if (evaluation is null)
-            {
-                return Problem("NOT_EVALUATED", "This item could not be evaluated.");
-            }
+                var evaluation = PolicyEvaluator.Evaluate(_policy, new EvaluationInput
+                {
+                    Leaves = LeavesFor(target, paths, item.Files.Where(f => f.Role != FileRole.Sidecar).Sum(f => f.Size)),
+                    NowUtc = _owner.Now,
+                    KnownUsers = _users.Select(u => u.Id).ToList(),
+                    ReadableUsers = _liveUsers,
+                    States = live,
+                    ProtectedIds = _owner.Policies.ProtectedIds(),
+                    Playback = playback,
+                    EvaluateUnit = false,
+                    PathComparison = PathGuard.PlatformComparison,
+                    UserCanAccessLibrary = (user, library) => _users.FirstOrDefault(u => u.Id == user)?.CanAccess(library) ?? false,
+                }).Items.GetValueOrDefault(target.ItemId);
 
-            if (!evaluation.Eligible)
-            {
-                var first = evaluation.Blocking.First();
-                return Problem(first.RuleId, first.Message);
+                if (evaluation is null)
+                {
+                    return Problem("NOT_EVALUATED", "This item could not be evaluated.");
+                }
+
+                if (!evaluation.Eligible)
+                {
+                    var first = evaluation.Blocking.First();
+                    return Problem(first.RuleId, first.Message);
+                }
             }
 
             return null;
         }
 
         /// <summary>The item with current paths, plus indexed siblings because keep-newest ranks within a show.</summary>
-        private IReadOnlyList<LeafItem> LeavesFor(PlanItem item)
+        private IReadOnlyList<LeafItem> LeavesFor(SharedRecord target, IReadOnlyList<string> paths, long size)
         {
+            var live = _owner.Host.GetItem(target.ItemId);
             var self = new LeafItem
             {
-                Id = item.ItemId,
-                Kind = item.Kind,
-                Name = item.Name,
-                LibraryId = item.LibraryId,
-                SeriesId = item.SeriesId,
-                SeasonId = item.SeasonId,
-                SeasonNumber = item.SeasonNumber,
-                EpisodeNumber = item.EpisodeNumber,
-                DateAddedUtc = _owner.Host.GetItem(item.ItemId)?.DateAddedUtc,
-                LogicalBytes = item.Files.Where(f => f.Role != FileRole.Sidecar).Sum(f => f.Size),
+                Id = target.ItemId,
+                Kind = target.Kind,
+                Name = target.Name,
+                LibraryId = target.LibraryId,
+                SeriesId = target.SeriesId,
+                SeasonId = target.SeasonId,
+                SeasonNumber = target.SeasonNumber,
+                EpisodeNumber = target.EpisodeNumber,
+                DateAddedUtc = live?.DateAddedUtc,
+                LogicalBytes = size,
                 Health = ItemHealth.Ok,
-                Paths = item.Files.Where(f => f.Role != FileRole.Sidecar).Select(f => f.Path).ToList(),
-                Tags = _owner.Host.GetItem(item.ItemId)?.Tags ?? [],
+                Paths = paths,
+                Tags = live?.Tags ?? [],
             };
 
-            if (item.SeriesId is not { } series || _policy.KeepNewestEpisodesPerShow is null)
+            if (target.SeriesId is not { } series || _policy.KeepNewestEpisodesPerShow is null)
             {
                 return [self];
             }
@@ -708,7 +805,7 @@ public sealed class CleanupCoordinator(
                 _siblings[series] = siblings = _owner.Inventory.LeavesOfSeries(series);
             }
 
-            return [self, .. siblings.Where(s => s.Id != item.ItemId)];
+            return [self, .. siblings.Where(s => s.Id != target.ItemId)];
         }
     }
 }

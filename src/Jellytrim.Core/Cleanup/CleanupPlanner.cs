@@ -41,7 +41,7 @@ public sealed class CleanupPlanner(
         var previewOnly = !config.DeletionEnabled;
 
         // While read-only, a preview shows what would be targeted across all libraries. Such a plan is marked and can never run.
-        var guard = new PathGuard(previewOnly ? locations : config.ApprovedRoots.Where(r => locations.Contains(r, StringComparer.Ordinal)));
+        var guard = new PathGuard(previewOnly ? locations : config.ApprovedRoots.Where(r => locations.Contains(r, StringComparer.Ordinal)), otherRoots: locations);
 
         var input = evaluations.LoadInput(host.GetActivePlayback());
         var result = PolicyEvaluator.Evaluate(policy, input);
@@ -86,7 +86,7 @@ public sealed class CleanupPlanner(
         var items = new List<PlanItem>();
         foreach (var leaf in eligible)
         {
-            var built = BuildItem(leaf, result.Items[leaf.Id], eligibleIds, guard, request.IncludeSidecars, out var exclusion);
+            var built = BuildItem(leaf, result.Items[leaf.Id], eligibleIds, leaves, guard, request.IncludeSidecars, out var exclusion);
             if (built is not null)
             {
                 items.Add(built);
@@ -234,7 +234,7 @@ public sealed class CleanupPlanner(
         }
     }
 
-    private PlanItem? BuildItem(LeafItem leaf, ItemEvaluation evaluation, HashSet<Guid> eligibleIds, PathGuard guard, bool includeSidecars, out PlanExclusion? exclusion)
+    private PlanItem? BuildItem(LeafItem leaf, ItemEvaluation evaluation, HashSet<Guid> eligibleIds, Dictionary<Guid, LeafItem> leaves, PathGuard guard, bool includeSidecars, out PlanExclusion? exclusion)
     {
         PlanItem? Refuse(string code, string message, out PlanExclusion? ex)
         {
@@ -259,7 +259,7 @@ public sealed class CleanupPlanner(
         }
 
         var files = new List<PlanFile>();
-        var shared = new HashSet<Guid>();
+        var shared = new List<SharedRecord>();
         foreach (var media in live.Files)
         {
             var observation = probe.Probe(media.Path);
@@ -294,7 +294,11 @@ public sealed class CleanupPlanner(
                     return Refuse("SAME_FILES_AS_OTHER_ITEM", "Another record in this plan points at the same files and will remove them.", out exclusion);
                 }
 
-                shared.Add(other);
+                if (shared.All(r => r.ItemId != other))
+                {
+                    var o = leaves[other];
+                    shared.Add(new SharedRecord(o.Id, o.Kind, o.Name, o.LibraryId, o.SeriesId, o.SeasonId, o.SeasonNumber, o.EpisodeNumber));
+                }
             }
 
             files.Add(ToPlanFile(media.Path, media.Role, observation));
@@ -341,7 +345,7 @@ public sealed class CleanupPlanner(
         }
 
         var removable = directories.Where(d => guard.CheckLocation(d) is { IsSafe: true }).OrderByDescending(d => d.Length).ToList();
-        return new PlanItem(leaf.Id, leaf.Kind, leaf.Name, live.SeriesName, leaf.SeasonNumber, leaf.EpisodeNumber, leaf.LibraryId, leaf.SeriesId, leaf.SeasonId, live.VersionIds, files, removable, neighbors, evaluation.Rules, shared.ToList());
+        return new PlanItem(leaf.Id, leaf.Kind, leaf.Name, live.SeriesName, leaf.SeasonNumber, leaf.EpisodeNumber, leaf.LibraryId, leaf.SeriesId, leaf.SeasonId, live.VersionIds, files, removable, neighbors, evaluation.Rules, shared);
     }
 
     private static bool IsLibraryRoot(string directory, PathGuard guard) => guard.CheckLocation(directory).Refusal == PathRefusal.IsRoot;
@@ -353,6 +357,10 @@ public sealed class CleanupPlanner(
         var episodes = input.Leaves.Where(l => l.Kind == MediaKind.Episode && l.Health != ItemHealth.NotFileBacked).ToList();
         var containers = new List<PlanContainer>();
 
+        // A virtual, disc-folder or .strm episode below means the show or season stays, so its artwork stays too.
+        var keptByOtherChildren = input.Leaves.Where(l => l.Kind == MediaKind.Episode && l.Health == ItemHealth.NotFileBacked)
+            .SelectMany(l => new[] { l.SeasonId, l.SeriesId }).OfType<Guid>().ToHashSet();
+
         void Add(IEnumerable<IGrouping<Guid?, LeafItem>> groups, MediaKind kind)
         {
             foreach (var group in groups)
@@ -363,7 +371,7 @@ public sealed class CleanupPlanner(
                 }
 
                 var record = host.GetItem(id);
-                if (record?.Path is null)
+                if (record is null)
                 {
                     continue;
                 }
@@ -371,7 +379,11 @@ public sealed class CleanupPlanner(
                 var files = new List<PlanFile>();
                 var directories = new List<string>();
                 var neighbors = new List<string>();
-                if (guard.CheckLocation(record.Path).IsSafe && Directory.Exists(record.Path))
+
+                // A season without its own folder has its show's path. That folder's artwork belongs to the show, which may be staying.
+                var sharesShowFolder = kind == MediaKind.Season && record.SeriesId is { } show
+                    && string.Equals(host.GetItem(show)?.Path, record.Path, StringComparison.Ordinal);
+                if (record.Path is not null && !sharesShowFolder && !keptByOtherChildren.Contains(id) && guard.CheckLocation(record.Path).IsSafe && Directory.Exists(record.Path))
                 {
                     directories.Add(record.Path);
                     try

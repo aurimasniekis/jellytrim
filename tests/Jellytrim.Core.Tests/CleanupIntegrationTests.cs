@@ -237,6 +237,7 @@ public class CleanupIntegrationTests : IDisposable
         await _rig.ScanAsync();
         var plan = _rig.Planner.CreatePlan(new PlanRequest { Type = SelectionType.Policy, PolicyId = policy.Id }, "a", "c").Plan;
         Assert.True(plan.HighImpact);
+        Assert.Equal("DELETE 2 ITEMS", plan.ConfirmationPhrase);
         Assert.Equal(2, plan.Items.Count);
         Assert.Equal(2, plan.Containers.Count);
         var job = await _rig.ExecuteAsync(plan);
@@ -247,6 +248,239 @@ public class CleanupIntegrationTests : IDisposable
         Assert.True(Directory.Exists(series.Path));
         Assert.Contains(series.Id, _rig.Host.RemovedRecords);
         Assert.Contains(season.Id, _rig.Host.RemovedRecords);
+    }
+
+    [Fact]
+    public async Task A_season_without_its_own_folder_never_claims_the_shows_artwork()
+    {
+        var seriesId = Guid.NewGuid();
+        var seasonOne = Guid.NewGuid();
+        var seasonTwo = Guid.NewGuid();
+        var showDir = Path.Combine(_rig.TvRoot, "Flat");
+        var art = TestRig.Write(Path.Combine(showDir, "tvshow.nfo"));
+        _rig.Host.Items[seriesId] = new HostItem { Id = seriesId, Kind = MediaKind.Series, Name = "Flat", LibraryId = TestRig.TvLib, Path = showDir, VersionIds = [seriesId] };
+        _rig.Host.Items[seasonOne] = new HostItem { Id = seasonOne, Kind = MediaKind.Season, Name = "Season 1", LibraryId = TestRig.TvLib, SeriesId = seriesId, SeasonNumber = 1, Path = showDir, VersionIds = [seasonOne] };
+        _rig.Host.Items[seasonTwo] = new HostItem { Id = seasonTwo, Kind = MediaKind.Season, Name = "Season 2", LibraryId = TestRig.TvLib, SeriesId = seriesId, SeasonNumber = 2, Path = showDir, VersionIds = [seasonTwo] };
+        HostItem Episode(Guid season, int s)
+        {
+            var id = Guid.NewGuid();
+            var path = TestRig.Write(Path.Combine(showDir, $"Flat S{s:00}E01.mkv"));
+            var item = new HostItem { Id = id, Kind = MediaKind.Episode, Name = $"S{s}E1", LibraryId = TestRig.TvLib, SeriesId = seriesId, SeasonId = season, SeriesName = "Flat", SeasonNumber = s, EpisodeNumber = 1, DateAddedUtc = _rig.Clock.Now.AddDays(-99), IsFileBacked = true, Path = path, Files = [new HostItemFile(path, FileRole.Main, id)], VersionIds = [id] };
+            _rig.Host.Items[id] = item;
+            return item;
+        }
+
+        var first = Episode(seasonOne, 1);
+        var second = Episode(seasonTwo, 2);
+        await _rig.ScanAsync();
+        var plan = _rig.PlanFor(first.Id);
+        Assert.Empty(plan.Containers.SelectMany(c => c.Files));
+        var job = await _rig.ExecuteAsync(plan);
+        Assert.Equal(JobStatus.Completed, job.Status);
+        Assert.True(File.Exists(art));
+        Assert.True(File.Exists(second.Path));
+        Assert.Contains(seasonOne, _rig.Host.RemovedRecords);
+        Assert.DoesNotContain(seriesId, _rig.Host.RemovedRecords);
+    }
+
+    [Fact]
+    public async Task Explaining_one_item_matches_a_full_evaluation()
+    {
+        var (_, _, eps) = _rig.AddShow("Show", 1, 3);
+        eps.ForEach(e => _rig.MarkPlayedByAll(e.Id));
+        var policy = _rig.SavePolicy(p => p.KeepNewestEpisodesPerShow = 1);
+        await _rig.ScanAsync();
+        var full = PolicyEvaluator.Evaluate(policy, _rig.Evaluations.LoadInput());
+        foreach (var episode in eps)
+        {
+            Assert.Equal(full.Items[episode.Id].Rules, _rig.Evaluations.Explain(policy, episode.Id, ActivePlayback.None)!.Rules);
+        }
+    }
+
+    private HostItem DuplicateRecordOf(HostItem a)
+    {
+        var id = Guid.NewGuid();
+        var dup = new HostItem { Id = id, Kind = MediaKind.Movie, Name = "Dup", LibraryId = TestRig.MoviesLib, DateAddedUtc = a.DateAddedUtc, IsFileBacked = true, Path = a.Path, Files = [new HostItemFile(a.Path!, FileRole.Main, id)], VersionIds = [id] };
+        _rig.Host.Items[id] = dup;
+        return dup;
+    }
+
+    private async Task<(HostItem Owner, HostItem Other, CleanupPlan Plan)> SharedPlanAsync()
+    {
+        var a = _rig.AddMovie("Alpha");
+        var b = DuplicateRecordOf(a);
+        await _rig.ScanAsync();
+        var plan = _rig.PlanFor(a.Id, b.Id);
+        var owner = plan.Items.Single().ItemId == a.Id ? a : b;
+        return (owner, owner == a ? b : a, plan);
+    }
+
+    [Fact]
+    public async Task A_protection_on_a_shared_record_stops_deletion_of_the_shared_file()
+    {
+        var (owner, other, plan) = await SharedPlanAsync();
+        _rig.Policies.AddProtection(new Protection(other.Id, ProtectionTarget.Item, "Dup", null, _rig.Clock.Now, "a"));
+        var job = await _rig.ExecuteAsync(plan);
+        Assert.Equal(JobStatus.Rejected, job.Status);
+        Assert.Equal(RuleIds.Explicit, job.Problems!.Single().Code);
+        Assert.True(File.Exists(owner.Path));
+    }
+
+    [Fact]
+    public async Task A_new_favorite_or_resume_on_a_shared_record_stops_deletion()
+    {
+        var (owner, other, plan) = await SharedPlanAsync();
+        _rig.Host.States[(other.Id, TestRig.Bob)] = new UserItemState(WatchState.Partial, 500);
+        var job = await _rig.ExecuteAsync(plan);
+        Assert.Equal(RuleIds.InProgress, job.Problems!.Single().Code);
+        Assert.True(File.Exists(owner.Path));
+    }
+
+    [Fact]
+    public async Task A_shared_record_whose_files_changed_stops_deletion()
+    {
+        var (owner, other, plan) = await SharedPlanAsync();
+        _rig.Host.Items.Remove(other.Id);
+        var job = await _rig.ExecuteAsync(plan);
+        Assert.Equal("ITEM_CHANGED", job.Problems!.Single().Code);
+        Assert.True(File.Exists(owner.Path));
+    }
+
+    [Fact]
+    public async Task An_episode_added_after_planning_keeps_the_shows_artwork()
+    {
+        var (series, season, eps) = _rig.AddShow("Show", 1, 1);
+        var art = TestRig.Write(Path.Combine(series.Path!, "tvshow.nfo"));
+        var seasonArt = TestRig.Write(Path.Combine(season.Path!, "poster.jpg"));
+        await _rig.ScanAsync();
+        var plan = _rig.PlanFor(eps[0].Id);
+        Assert.Contains(plan.Containers.SelectMany(c => c.Files), f => f.Path == art);
+
+        var late = Guid.NewGuid();
+        var latePath = TestRig.Write(Path.Combine(season.Path!, "Show S01E02.mkv"));
+        _rig.Host.Items[late] = new HostItem { Id = late, Kind = MediaKind.Episode, Name = "Late", LibraryId = TestRig.TvLib, SeriesId = series.Id, SeasonId = season.Id, IsFileBacked = true, Path = latePath, Files = [new HostItemFile(latePath, FileRole.Main, late)], VersionIds = [late] };
+
+        var job = await _rig.ExecuteAsync(plan);
+        Assert.Equal(JobStatus.Completed, job.Status);
+        Assert.True(File.Exists(art));
+        Assert.True(File.Exists(seasonArt));
+        Assert.True(File.Exists(latePath));
+        Assert.Contains(_rig.Cleanup.ListJobItems(job.Id, 0, 10, null).Rows, r => r.Code == "CONTAINER_NOT_EMPTY");
+    }
+
+    [Fact]
+    public async Task A_virtual_episode_keeps_artwork_out_of_the_plan()
+    {
+        var (series, season, eps) = _rig.AddShow("Show", 1, 1);
+        var art = TestRig.Write(Path.Combine(series.Path!, "tvshow.nfo"));
+        var missing = Guid.NewGuid();
+        _rig.Host.Items[missing] = new HostItem { Id = missing, Kind = MediaKind.Episode, Name = "Unaired", LibraryId = TestRig.TvLib, SeriesId = series.Id, SeasonId = season.Id, IsFileBacked = false, VersionIds = [missing] };
+        await _rig.ScanAsync();
+        var plan = _rig.PlanFor(eps[0].Id);
+        Assert.DoesNotContain(plan.Containers.SelectMany(c => c.Files), f => f.Path == art);
+        await _rig.ExecuteAsync(plan);
+        Assert.True(File.Exists(art));
+    }
+
+    [Fact]
+    public async Task Container_artwork_has_durable_per_file_records()
+    {
+        var (series, _, eps) = _rig.AddShow("Show", 1, 1);
+        var art = TestRig.Write(Path.Combine(series.Path!, "tvshow.nfo"));
+        await _rig.ScanAsync();
+        var job = await _rig.ExecuteAsync(_rig.PlanFor(eps[0].Id));
+        var files = _rig.Cleanup.ListJobItems(job.Id, 0, 10, null).Rows.SelectMany(r => r.Files).ToList();
+        Assert.Equal(FileStatus.Deleted, files.Single(f => f.Path == art).Status);
+        Assert.Contains("1 item(s) permanently deleted", job.Message);
+    }
+
+    [Fact]
+    public async Task Changed_container_artwork_is_refused_and_reported()
+    {
+        var (series, _, eps) = _rig.AddShow("Show", 1, 1);
+        var art = TestRig.Write(Path.Combine(series.Path!, "tvshow.nfo"));
+        await _rig.ScanAsync();
+        var plan = _rig.PlanFor(eps[0].Id);
+        await File.AppendAllTextAsync(art, "edited", TestContext.Current.CancellationToken);
+        var job = await _rig.ExecuteAsync(plan);
+        Assert.Equal(JobStatus.CompletedWithIssues, job.Status);
+        Assert.True(File.Exists(art));
+        Assert.DoesNotContain(series.Id, _rig.Host.RemovedRecords);
+    }
+
+    [Fact]
+    public async Task Removing_a_root_during_a_job_stops_deletion_under_it()
+    {
+        var a = _rig.AddMovie("Alpha");
+        var b = _rig.AddMovie("Beta");
+        await _rig.ScanAsync();
+        var plan = _rig.PlanFor(a.Id, b.Id);
+        var done = false;
+        _rig.Deleter.Before = _ =>
+        {
+            if (!done)
+            {
+                done = true;
+                var config = _rig.Settings.Get();
+                config.Value.ApprovedRoots = [_rig.TvRoot];
+                _rig.Settings.Save(config.Value, config.Revision, _rig.Clock.Now);
+            }
+        };
+        var job = await _rig.ExecuteAsync(plan);
+        Assert.Equal(JobStatus.CompletedWithIssues, job.Status);
+        Assert.Single(_rig.Deleter.Deleted);
+        var rows = _rig.Cleanup.ListJobItems(job.Id, 0, 10, null).Rows;
+        Assert.Contains(rows, r => r.Status == ItemStatus.Skipped && r.Code == "PATH_OutsideApprovedRoots");
+    }
+
+    [Fact]
+    public async Task Editing_the_policy_during_a_job_stops_the_rest()
+    {
+        var a = _rig.AddMovie("Alpha");
+        var b = _rig.AddMovie("Beta");
+        _rig.MarkPlayedByAll(a.Id);
+        _rig.MarkPlayedByAll(b.Id);
+        var policy = _rig.SavePolicy();
+        await _rig.ScanAsync();
+        var plan = _rig.Planner.CreatePlan(new PlanRequest { Type = SelectionType.Policy, PolicyId = policy.Id }, "a", "c").Plan;
+        var done = false;
+        _rig.Deleter.Before = _ =>
+        {
+            if (!done)
+            {
+                done = true;
+                _rig.Policies.Update(_rig.Policies.Get(policy.Id)!, 1, _rig.Clock.Now);
+            }
+        };
+        var job = await _rig.ExecuteAsync(plan);
+        Assert.Single(_rig.Deleter.Deleted);
+        Assert.Contains(_rig.Cleanup.ListJobItems(job.Id, 0, 10, null).Rows, r => r.Code == "POLICY_CHANGED");
+    }
+
+    [Fact]
+    public async Task Disposing_the_coordinator_twice_is_safe()
+    {
+        var coordinator = _rig.NewCoordinator();
+        await coordinator.DisposeAsync();
+        await coordinator.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Nested_library_root_is_never_removed_and_its_artwork_is_not_claimed()
+    {
+        var outer = Path.Combine(_rig.Sandbox, "media");
+        _rig.Host.Libraries.Add(new HostLibrary(Guid.NewGuid(), "Outer", "movies", [outer]));
+        _rig.Settings.Save(new JellytrimSettings { DeletionEnabled = true, ApprovedRoots = [outer] }, 1, _rig.Clock.Now);
+        var movie = _rig.AddMovie("Alpha", ownFolder: false);
+        var poster = TestRig.Write(Path.Combine(_rig.MoviesRoot, "poster.jpg"));
+        await _rig.ScanAsync();
+        var plan = _rig.PlanFor(movie.Id);
+        Assert.Single(plan.Items);
+        Assert.DoesNotContain(plan.Items.Single().Files, f => f.Path == poster);
+        Assert.DoesNotContain(_rig.MoviesRoot, plan.Items.Single().DirectoriesIfEmpty);
+        await _rig.ExecuteAsync(plan);
+        Assert.True(File.Exists(poster));
+        Assert.True(Directory.Exists(_rig.MoviesRoot));
     }
 
     [Fact]

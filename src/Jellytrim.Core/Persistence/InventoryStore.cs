@@ -178,6 +178,7 @@ public sealed class InventoryStore(JellytrimDb db)
         RollUpContainers(c, tx, "season_id", 3);
         RollUpContainers(c, tx, "series_id", 2);
         RollUpLibraries(c, tx);
+        c.Cmd("ANALYZE", tx).Exec();
     });
 
     /// <summary>After deletion: drops the rows immediately so the UI is not misleading until the next scan.</summary>
@@ -268,10 +269,23 @@ public sealed class InventoryStore(JellytrimDb db)
         c.Cmd("DELETE FROM scans WHERE started_at<$t AND status<>'Running'", tx).With("$t", Db.Ms(olderThanUtc)).Exec();
     });
 
-    public EvaluationInput LoadEvaluationInput(DateTime nowUtc, ActivePlayback playback, IReadOnlySet<Guid> protectedIds, StringComparison pathComparison) => db.Read(c =>
+    /// <summary>Loads evaluation facts. With an item, only its own show is read, which is all that rules can depend on.</summary>
+    public EvaluationInput LoadEvaluationInput(DateTime nowUtc, ActivePlayback playback, IReadOnlySet<Guid> protectedIds, StringComparison pathComparison, Guid? onlyAround = null) => db.Read(c =>
     {
+        var scope = string.Empty;
+        string? itemParam = null;
+        string? seriesParam = null;
+        if (onlyAround is { } around)
+        {
+            itemParam = Db.Id(around);
+            seriesParam = c.Cmd("SELECT series_id FROM items WHERE item_id=$i").With("$i", itemParam).Rows(r => Db.Str(r, 0)).FirstOrDefault();
+            scope = "item_id=$i OR item_id=$s OR series_id=$s";
+        }
+
+        SqliteCommand Scoped(string sql) => onlyAround is null ? c.Cmd(sql) : c.Cmd(sql).With("$i", itemParam).With("$s", seriesParam);
+
         var paths = new Dictionary<long, List<string>>();
-        using (var cmd = c.Cmd("SELECT x.item_key,f.path FROM item_files x JOIN files f ON f.file_key=x.file_key"))
+        using (var cmd = Scoped($"SELECT x.item_key,f.path FROM item_files x JOIN files f ON f.file_key=x.file_key {(onlyAround is null ? string.Empty : $"WHERE x.item_key IN (SELECT item_key FROM items WHERE {scope})")}"))
         using (var r = cmd.ExecuteReader())
         {
             while (r.Read())
@@ -288,7 +302,7 @@ public sealed class InventoryStore(JellytrimDb db)
 
         var keyToId = new Dictionary<long, Guid>();
         var leaves = new List<LeafItem>();
-        using (var cmd = c.Cmd("SELECT item_key,item_id,kind,name,library_id,series_id,season_id,season_no,episode_no,date_added,logical_bytes,reclaimable_bytes,health,tags FROM items"))
+        using (var cmd = Scoped($"SELECT item_key,item_id,kind,name,library_id,series_id,season_id,season_no,episode_no,date_added,logical_bytes,reclaimable_bytes,health,tags FROM items {(onlyAround is null ? string.Empty : $"WHERE {scope}")}"))
         using (var r = cmd.ExecuteReader())
         {
             while (r.Read())
@@ -323,7 +337,7 @@ public sealed class InventoryStore(JellytrimDb db)
         var users = c.Cmd("SELECT user_key,user_id,deleted,readable_generation,all_libraries,libraries FROM users").Rows(r => (Key: r.GetInt64(0), Id: Guid.Parse(r.GetString(1)), Deleted: r.GetBoolean(2), Readable: r.GetInt64(3), All: r.GetBoolean(4), Libraries: Json.Read<List<Guid>>(r.GetString(5))));
         var keyToUser = users.ToDictionary(u => u.Key, u => u.Id);
         var states = new Dictionary<(Guid, Guid), UserItemState>();
-        using (var cmd = c.Cmd("SELECT item_key,user_key,state,position_ticks,play_count,last_played,favorite FROM item_user_state"))
+        using (var cmd = Scoped($"SELECT item_key,user_key,state,position_ticks,play_count,last_played,favorite FROM item_user_state {(onlyAround is null ? string.Empty : $"WHERE item_key IN (SELECT item_key FROM items WHERE {scope})")}"))
         using (var r = cmd.ExecuteReader())
         {
             while (r.Read())
@@ -390,7 +404,9 @@ public sealed class InventoryStore(JellytrimDb db)
     public IReadOnlyList<string> MediaPathsInDirectory(string directory) => db.Read(c =>
     {
         var prefix = directory.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        return c.Cmd("SELECT path FROM files WHERE path >= $a AND path < $b").With("$a", prefix).With("$b", prefix + char.MaxValue)
+        // The separator's successor bounds the range: UTF-8 sorts supplementary characters above any char.MaxValue sentinel.
+        var upper = prefix[..^1] + (char)(Path.DirectorySeparatorChar + 1);
+        return c.Cmd("SELECT path FROM files WHERE path >= $a AND path < $b").With("$a", prefix).With("$b", upper)
             .Rows(r => r.GetString(0)).Where(p => string.Equals(Path.GetDirectoryName(p), directory.TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal)).ToList();
     });
 

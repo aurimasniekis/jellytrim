@@ -184,8 +184,8 @@ public sealed class ExplorerStore(JellytrimDb db)
         var policy = q.PolicyId is null ? "NULL,NULL,NULL" :
             """
             (SELECT COUNT(*) FROM policy_eligible e WHERE e.policy_id=$policy AND e.item_key=i.item_key),
-            CASE i.kind WHEN 2 THEN (SELECT COUNT(*) FROM items d JOIN policy_eligible e ON e.item_key=d.item_key AND e.policy_id=$policy WHERE d.series_id=i.item_id AND d.kind=4)
-                        WHEN 3 THEN (SELECT COUNT(*) FROM items d JOIN policy_eligible e ON e.item_key=d.item_key AND e.policy_id=$policy WHERE d.season_id=i.item_id AND d.kind=4) END,
+            CASE i.kind WHEN 2 THEN (SELECT COUNT(*) FROM items d CROSS JOIN policy_eligible e ON e.policy_id=$policy AND e.item_key=d.item_key WHERE d.series_id=i.item_id AND d.kind=4)
+                        WHEN 3 THEN (SELECT COUNT(*) FROM items d CROSS JOIN policy_eligible e ON e.policy_id=$policy AND e.item_key=d.item_key WHERE d.season_id=i.item_id AND d.kind=4) END,
             CASE i.kind WHEN 2 THEN (SELECT COUNT(*) FROM items d WHERE d.series_id=i.item_id AND d.kind=4)
                         WHEN 3 THEN (SELECT COUNT(*) FROM items d WHERE d.season_id=i.item_id AND d.kind=4) END
             """;
@@ -279,6 +279,8 @@ public sealed class ExplorerStore(JellytrimDb db)
         return leaves.Distinct().ToList();
     });
 
+    // CROSS JOIN pins SQLite's join order: walk this container's episodes, then probe the eligible set by primary key.
+    // Left to the planner, scanning the eligible set per row took 19 s on 100k items.
     private sealed record Built(string With, string Where, long[] UserKeys, List<(string Name, object? Value)> Parameters);
 
     private static SqliteCommand Bind(SqliteCommand cmd, Built build)
@@ -363,8 +365,8 @@ public sealed class ExplorerStore(JellytrimDb db)
         {
             var match = """
                 (EXISTS (SELECT 1 FROM policy_eligible e WHERE e.policy_id=$policy AND e.item_key=i.item_key)
-                 OR (i.kind=2 AND EXISTS (SELECT 1 FROM items d JOIN policy_eligible e ON e.item_key=d.item_key AND e.policy_id=$policy WHERE d.series_id=i.item_id AND d.kind=4))
-                 OR (i.kind=3 AND EXISTS (SELECT 1 FROM items d JOIN policy_eligible e ON e.item_key=d.item_key AND e.policy_id=$policy WHERE d.season_id=i.item_id AND d.kind=4)))
+                 OR (i.kind=2 AND EXISTS (SELECT 1 FROM items d CROSS JOIN policy_eligible e ON e.policy_id=$policy AND e.item_key=d.item_key WHERE d.series_id=i.item_id AND d.kind=4))
+                 OR (i.kind=3 AND EXISTS (SELECT 1 FROM items d CROSS JOIN policy_eligible e ON e.policy_id=$policy AND e.item_key=d.item_key WHERE d.season_id=i.item_id AND d.kind=4)))
                 """;
             where.Add(eligible ? match : $"NOT {match}");
         }

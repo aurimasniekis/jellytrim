@@ -33,6 +33,19 @@ test.describe('authorization on the real server', () => {
         expect((await execute.json()).code).toBe('API_KEY_NOT_ALLOWED');
     });
 
+    test('an API key cannot weaken protections or policies', async ({ request }) => {
+        for (const [method, route] of [['DELETE', `Protections/${ID}`], ['DELETE', `Policies/${ID}`], ['PUT', `Policies/${ID}`]]) {
+            const response = await request.fetch(`${state.base}/Jellytrim/${route}`, { method, headers: { ...auth(state.apiKey), 'Content-Type': 'application/json' }, data: method === 'PUT' ? { policy: { name: 'x' }, expectedRevision: 1 } : undefined });
+            expect(response.status(), route).toBe(403);
+        }
+    });
+
+    test('the plugin leaves the server OpenAPI document working', async ({ request }) => {
+        const document = await request.get(`${state.base}/api-docs/openapi.json`);
+        expect(document.status()).toBe(200);
+        expect((await document.json()).paths['/Users']).toBeTruthy();
+    });
+
     test('errors use the stable shape with a correlation id, and bounds are enforced', async ({ request }) => {
         const tooBig = await request.post(`${state.base}/Jellytrim/Items/Query`, { headers: auth(), data: { limit: 100000 } });
         expect(tooBig.status()).toBe(400);

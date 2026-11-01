@@ -338,6 +338,25 @@ public class PolicyEvaluatorTests
     }
 
     [Fact]
+    public void An_episode_with_a_missing_file_takes_no_keep_newest_slot_but_an_offline_one_does()
+    {
+        Guid show = Guid.NewGuid(), s1 = Guid.NewGuid();
+        LeafItem E(int n, ItemHealth health) => new() { Id = Guid.NewGuid(), Kind = MediaKind.Episode, Name = "e", LibraryId = Lib, SeriesId = show, SeasonId = s1, SeasonNumber = 1, EpisodeNumber = n, Health = health, DateAddedUtc = Now.AddDays(-400) };
+        var older = E(3, ItemHealth.Ok);
+        var realNewest = E(4, ItemHealth.Ok);
+        var missing = E(5, ItemHealth.Missing);
+        var p = Policy(Ann);
+        p.KeepNewestEpisodesPerShow = 1;
+        var states = new[] { older, realNewest, missing }.ToDictionary(l => (l.Id, Ann), _ => Played());
+        Assert.False(Eval(p, Input([older, realNewest, missing], states, known: [Ann]), realNewest.Id).Eligible);
+        Assert.True(Eval(p, Input([older, realNewest, missing], states, known: [Ann]), older.Id).Eligible);
+
+        var offline = E(5, ItemHealth.Unavailable);
+        states[(offline.Id, Ann)] = Played();
+        Assert.Equal(RuleOutcome.Pass, Outcome(Eval(p, Input([older, realNewest, offline], states, known: [Ann]), realNewest.Id), RuleIds.KeepNewestEpisodes));
+    }
+
+    [Fact]
     public void Keep_newest_is_unknown_for_the_show_when_any_episode_is_unnumbered()
     {
         Guid show = Guid.NewGuid(), s1 = Guid.NewGuid();

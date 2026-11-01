@@ -33,12 +33,17 @@ public sealed record PathCheck(PathRefusal Refusal, string? MatchedRoot = null)
 public sealed class PathGuard
 {
     private readonly string[] _roots;
+    private readonly string[] _neverTargets;
     private readonly StringComparison _comparison;
 
-    public PathGuard(IEnumerable<string> approvedRoots, StringComparison? comparison = null)
+    /// <param name="approvedRoots">Directories inside which targets are allowed.</param>
+    /// <param name="comparison">Path comparison; defaults to the platform's.</param>
+    /// <param name="otherRoots">Further roots that are never targets themselves, such as unapproved library locations nested in an approved one.</param>
+    public PathGuard(IEnumerable<string> approvedRoots, StringComparison? comparison = null, IEnumerable<string>? otherRoots = null)
     {
         _comparison = comparison ?? PlatformComparison;
         _roots = approvedRoots.Select(TrimRoot).Where(r => r.Length > 0).Distinct().ToArray();
+        _neverTargets = _roots.Concat((otherRoots ?? []).Select(TrimRoot).Where(r => r.Length > 0)).Distinct().ToArray();
     }
 
     /// <summary>Windows and default macOS volumes are case-insensitive; Linux is compared exactly.</summary>
@@ -92,13 +97,15 @@ public sealed class PathGuard
             return new PathCheck(PathRefusal.NoApprovedRoot);
         }
 
+        // Checked across all roots first: with nested roots, an inner one would otherwise pass as a path inside the outer.
+        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar);
+        if (_neverTargets.FirstOrDefault(r => string.Equals(trimmed, r, _comparison)) is { } isRoot)
+        {
+            return new PathCheck(PathRefusal.IsRoot, isRoot);
+        }
+
         foreach (var root in _roots)
         {
-            if (string.Equals(path.TrimEnd(Path.DirectorySeparatorChar), root, _comparison))
-            {
-                return new PathCheck(PathRefusal.IsRoot, root);
-            }
-
             if (!path.StartsWith(root + Path.DirectorySeparatorChar, _comparison))
             {
                 continue;

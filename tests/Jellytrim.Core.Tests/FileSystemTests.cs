@@ -229,6 +229,16 @@ public class PathGuardTests : IDisposable
     }
 
     [Fact]
+    public void A_nested_root_is_a_root_whichever_order_they_are_listed()
+    {
+        var inner = Path.Combine(_root, "inner");
+        Directory.CreateDirectory(inner);
+        Assert.Equal(PathRefusal.IsRoot, new PathGuard([_root, inner], StringComparison.Ordinal).CheckLocation(inner).Refusal);
+        Assert.Equal(PathRefusal.IsRoot, new PathGuard([_root], StringComparison.Ordinal, [inner]).CheckLocation(inner).Refusal);
+        Assert.True(new PathGuard([_root], StringComparison.Ordinal, [inner]).CheckLocation(Path.Combine(inner, "a.mkv")).IsSafe);
+    }
+
+    [Fact]
     public void Comparison_mode_decides_case_sensitivity()
     {
         var file = TestRig.Write(Path.Combine(_root, "a.mkv"));
@@ -303,6 +313,69 @@ public class SidecarDiscoveryTests : IDisposable
         Assert.Equal(["0.jpg"], Names(scan.Sidecars));
         Assert.Contains("extras", Names(scan.Unplanned));
         Assert.True(scan.HasSubdirectories);
+    }
+
+    [Fact]
+    public void An_unindexed_extra_beside_the_movie_keeps_its_own_subtitles()
+    {
+        var movie = F("Foo.mkv");
+        F("Foo-trailer.mkv");
+        F("Foo-trailer.srt");
+        F("Foo.srt");
+        var scan = SidecarDiscovery.Discover(_dir, [movie], [], includeFolderArtwork: false);
+        Assert.Equal(["Foo.srt"], Names(scan.Sidecars));
+    }
+
+    [Theory]
+    [InlineData("Foo.iso")]
+    [InlineData("Foo.strm")]
+    public void An_unindexed_video_with_the_same_stem_keeps_shared_metadata(string other)
+    {
+        var movie = F("Foo.mkv");
+        F(other);
+        F("Foo.nfo");
+        F("poster.jpg");
+        var scan = SidecarDiscovery.Discover(_dir, [movie], [], includeFolderArtwork: true);
+        Assert.Empty(scan.Sidecars);
+    }
+
+    [Fact]
+    public void Videos_in_a_subfolder_mean_the_folder_artwork_is_not_this_movies()
+    {
+        var movie = F("IronMan.mkv");
+        F("poster.jpg");
+        TestRig.Write(Path.Combine(_dir, "Thor", "Thor.mkv"), 1);
+        Assert.Empty(SidecarDiscovery.Discover(_dir, [movie], [], includeFolderArtwork: true).Sidecars);
+    }
+
+    [Fact]
+    public void Extras_subfolders_do_not_block_folder_artwork()
+    {
+        var movie = F("Foo.mkv");
+        F("poster.jpg");
+        TestRig.Write(Path.Combine(_dir, "extras", "a.mkv"), 1);
+        Assert.Equal(["poster.jpg"], Names(SidecarDiscovery.Discover(_dir, [movie], [], includeFolderArtwork: true).Sidecars));
+    }
+
+    [Fact]
+    public void Trickplay_shared_with_another_version_of_the_stem_is_not_claimed()
+    {
+        var movie = F("Foo.mkv");
+        F("Foo.avi");
+        TestRig.Write(Path.Combine(_dir, "Foo.trickplay", "320", "0.jpg"), 1);
+        Assert.Empty(SidecarDiscovery.Discover(_dir, [movie], [], includeFolderArtwork: false).Sidecars);
+    }
+
+    [Theory]
+    [InlineData("season01-poster.jpg", true)]
+    [InlineData("season-specials-poster.jpg", true)]
+    [InlineData("season.nfo", true)]
+    [InlineData("Seasons in the Sun.srt", false)]
+    [InlineData("season finale notes.nfo", false)]
+    public void Season_artwork_is_matched_by_pattern_not_prefix(string name, bool claimed)
+    {
+        F(name);
+        Assert.Equal(claimed, SidecarDiscovery.DiscoverContainerArtwork(_dir).Sidecars.Any());
     }
 
     [Fact]

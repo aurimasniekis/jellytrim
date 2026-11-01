@@ -47,7 +47,7 @@ export interface Recommendation { rank: number; itemId: string; name: string; re
 export interface RecommendationSet { requestedBytes: number; selectedBytes: number; targetMet: boolean; items: Recommendation[]; eligibleConsidered: number; skippedNoReclaim: number }
 
 export interface PlanFile { path: string; role: FileRole; identity: string; volumeId: string | null; size: number; allocatedBytes: number; linkCount: number; modifiedUnixNanos: number; estimatedFreedBytes: number }
-export interface PlanItem { itemId: string; kind: MediaKind; name: string; seriesName: string | null; seasonNumber: number | null; episodeNumber: number | null; files: PlanFile[]; directoriesIfEmpty: string[]; unplannedNeighbors: string[]; reasons: RuleEvaluation[]; sharedRecordIds: string[] }
+export interface PlanItem { itemId: string; kind: MediaKind; name: string; seriesName: string | null; seasonNumber: number | null; episodeNumber: number | null; files: PlanFile[]; directoriesIfEmpty: string[]; unplannedNeighbors: string[]; reasons: RuleEvaluation[]; sharedRecords: { itemId: string }[] }
 export interface PlanContainer { itemId: string; kind: MediaKind; name: string; childItemIds: string[]; files: PlanFile[]; directoriesIfEmpty: string[]; unplannedNeighbors: string[] }
 export interface PlanExclusion { itemId: string; name: string; code: string; message: string; rules: RuleEvaluation[] }
 export interface PlanTotals { items: number; files: number; logicalBytes: number; uniqueBytes: number; estimatedReclaimableBytes: number; hardLinkedRetained: number }

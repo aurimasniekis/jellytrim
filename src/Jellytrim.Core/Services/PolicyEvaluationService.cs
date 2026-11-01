@@ -77,7 +77,7 @@ public sealed class PolicyEvaluationService(InventoryStore inventory, PolicyStor
     /// <summary>Full explanation for one item, including rules that passed.</summary>
     public ItemEvaluation? Explain(CleanupPolicy policy, Guid itemId, ActivePlayback playback)
     {
-        var input = LoadInput(playback);
+        var input = inventory.LoadEvaluationInput(Now, playback, policies.ProtectedIds(), PathGuard.PlatformComparison, itemId);
         return PolicyEvaluator.Evaluate(policy, input).Items.GetValueOrDefault(itemId);
     }
 }

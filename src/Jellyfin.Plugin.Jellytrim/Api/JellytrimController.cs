@@ -27,6 +27,9 @@ namespace Jellyfin.Plugin.Jellytrim.Api;
 [Authorize(Policy = Policies.RequiresElevation)]
 [TypeFilter(typeof(ApiErrorFilter))]
 [Produces(MediaTypeNames.Application.Json)]
+// Jellyfin's OpenAPI generator uses one flat schema namespace across all controllers. A plugin type sharing a name with
+// a server type (UserDto did) makes the whole server's document fail with a 500. Documented in docs/api.md instead.
+[ApiExplorerSettings(IgnoreApi = true)]
 public sealed partial class JellytrimController(
     JellytrimRuntime runtime,
     IMediaHost host,
@@ -213,6 +216,7 @@ public sealed partial class JellytrimController(
     [ProducesResponseType<PolicyDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> UpdatePolicy([FromRoute] Guid policyId, [FromBody] PolicyUpdateRequest request)
     {
+        RefuseApiKey();
         request.Policy.Id = policyId;
         var problems = request.Policy.Validate();
         if (problems.Count > 0)
@@ -230,6 +234,7 @@ public sealed partial class JellytrimController(
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public IActionResult DeletePolicy([FromRoute] Guid policyId)
     {
+        RefuseApiKey();
         if (!policies.Delete(policyId))
         {
             throw JellytrimException.NotFound("Policy");
@@ -299,6 +304,7 @@ public sealed partial class JellytrimController(
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> RemoveProtection([FromRoute] Guid targetId)
     {
+        RefuseApiKey();
         if (!policies.RemoveProtection(targetId))
         {
             throw JellytrimException.NotFound("Protection");
@@ -454,7 +460,7 @@ public sealed partial class JellytrimController(
 
     /// <summary>
     /// API keys carry the administrator role in Jellyfin and are long-lived. Destructive authority needs an interactive
-    /// administrator, so a leaked automation key can read but cannot turn deletion on or run a plan.
+    /// administrator, so a leaked automation key can read but cannot turn deletion on, run a plan, or weaken protections and policies.
     /// </summary>
     private void RefuseApiKey()
     {

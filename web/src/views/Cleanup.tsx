@@ -134,7 +134,7 @@ function Review({ plan, setPlan, shared, onStarted, onDiscard }: { plan: PlanDto
             {expired && <Alert kind="warning" title="This plan expired.">Plans are short-lived so that what you confirm is what is on disk. Generate a new one.</Alert>}
             {header.warnings.map(w => <Alert key={w} kind="warning">{w}</Alert>)}
             <div class="jt-stats">
-                <Stat label="Items to delete" value={totals.items.toLocaleString()} sub={`${totals.files.toLocaleString()} files`} />
+                <Stat label="Items to delete" value={totals.items.toLocaleString()} sub={`${totals.files.toLocaleString()} file(s)`} />
                 <Stat label="Estimated reclaim" value={<Size value={totals.estimatedReclaimableBytes} />} sub="Estimate. See below." />
                 <Stat label="Logical / unique" value={<Size value={totals.logicalBytes} />} sub={<><Size value={totals.uniqueBytes} /> unique</>} />
                 <Stat label="Excluded" value={plan.exclusions.total.toLocaleString()} sub="Items kept, with reasons" />
@@ -222,8 +222,8 @@ function Confirm({ plan, onClose, onStarted }: { plan: PlanDto; onClose: () => v
     return (
         <Dialog title={`Permanently delete ${header.totals.items} item(s)?`} onClose={onClose}>
             <Alert kind="error" title="This cannot be undone.">jellytrim does not move files to a trash folder. Once a file is deleted, restoring it needs your own backups.</Alert>
-            <p>{header.totals.files.toLocaleString()} files, approximately {bytes(header.totals.estimatedReclaimableBytes)} estimated to be freed.</p>
-            <p class="jt-small jt-muted">Each item is re-checked right before deletion. If anything changed since this plan was made, nothing is deleted and you will be asked for a new plan.</p>
+            <p>{header.totals.files.toLocaleString()} file(s), approximately {bytes(header.totals.estimatedReclaimableBytes)} estimated to be freed.</p>
+            <p class="jt-small jt-muted">Everything is re-checked before the first deletion: if anything changed since this plan was made, nothing is deleted and you will need a new plan. Each item is checked again right before its own deletion, and is skipped and reported if it changed in between.</p>
             {error && <ErrorState error={error} />}
             <label class="jt-check"><input data-autofocus type="checkbox" checked={acknowledged} onChange={e => setAcknowledged((e.target as HTMLInputElement).checked)} /><span>I reviewed this plan and understand that these files will be permanently deleted.</span></label>
             {required && (

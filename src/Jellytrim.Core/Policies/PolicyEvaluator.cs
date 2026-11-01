@@ -427,7 +427,8 @@ public static class PolicyEvaluator
 
     /// <summary>
     /// Keep-newest: within a show, regular episodes sort by (season, episode) and the top N are kept.
-    /// Specials (season 0) neither count toward N nor are protected by this rule. If any regular file-backed
+    /// Episodes with no file (virtual, or missing while the root is online) do not take a slot, because they cannot be kept.
+    /// Offline episodes do count: they may well exist. Specials (season 0) neither count toward N nor are protected by this rule. If any regular file-backed
     /// episode lacks numbering, order cannot be established and the whole show is Unknown.
     /// </summary>
     private static Dictionary<Guid, RuleEvaluation> BuildKeepNewest(CleanupPolicy policy, EvaluationInput input)
@@ -444,7 +445,7 @@ public static class PolicyEvaluator
         }
 
         var groups = input.Leaves
-            .Where(l => l.Kind == MediaKind.Episode && l.SeriesId is not null && l.Health != ItemHealth.NotFileBacked)
+            .Where(l => l.Kind == MediaKind.Episode && l.SeriesId is not null && l.Health is not (ItemHealth.NotFileBacked or ItemHealth.Missing))
             .GroupBy(l => l.SeriesId!.Value);
         foreach (var group in groups)
         {

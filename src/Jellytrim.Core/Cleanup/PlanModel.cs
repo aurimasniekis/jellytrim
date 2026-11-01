@@ -55,7 +55,10 @@ public sealed record PlanItem(
     IReadOnlyList<string> DirectoriesIfEmpty,
     IReadOnlyList<string> UnplannedNeighbors,
     IReadOnlyList<RuleEvaluation> Reasons,
-    IReadOnlyList<Guid> SharedRecordIds);
+    IReadOnlyList<SharedRecord> SharedRecords);
+
+/// <summary>Another server record for exactly the same files. It is re-checked like the item, since its protections apply to those files too.</summary>
+public sealed record SharedRecord(Guid ItemId, MediaKind Kind, string Name, Guid LibraryId, Guid? SeriesId, Guid? SeasonId, int? SeasonNumber, int? EpisodeNumber);
 
 /// <summary>A season or show whose every file-backed episode is in the plan, so its folder artwork can go too.</summary>
 public sealed record PlanContainer(
