@@ -58,7 +58,8 @@ test('settings, policies, jobs and audit survive a server restart, and the plugi
     const jobsBefore = (await (await request.get(`${state.base}/Jellytrim/Jobs`, { headers: auth() })).json()).total;
     expect(jobsBefore).toBeGreaterThan(0);
     env('restart');
-    await expect.poll(async () => (await request.get(`${state.base}/Jellytrim/Status`, { headers: auth() })).status(), { timeout: 90_000 }).toBe(200);
+    // The connection can be reset while the server restarts, so a failed request counts as not up yet.
+    await expect.poll(async () => (await request.get(`${state.base}/Jellytrim/Status`, { headers: auth() }).catch(() => ({ status: () => 0 }))).status(), { timeout: 90_000 }).toBe(200);
     const status = await (await request.get(`${state.base}/Jellytrim/Status`, { headers: auth() })).json();
     expect(status.deletionEnabled).toBe(true);
     expect(status.activeJobId).toBeNull();
