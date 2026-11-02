@@ -3,6 +3,8 @@ services:
   jellyfin:
     image: jellyfin/jellyfin:12.4.20261026-211555
     container_name: jellytrim-e2e
+    # Runs as the host user, as Jellyfin usually does, so its files are writable by the tests on Linux too.
+    user: "${JELLYTRIM_E2E_USER:?set by e2e/env.py}"
     ports:
       - "${JELLYTRIM_E2E_PORT:-18096}:8096"
     volumes:

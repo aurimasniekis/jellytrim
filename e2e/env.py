@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / ".e2e" / "run"
 COMPOSE = ["docker", "compose", "-f", str(ROOT / "deploy" / "compose.e2e.yml"), "-p", "jellytrim-e2e"]
+os.environ.setdefault("JELLYTRIM_E2E_USER", f"{os.getuid()}:{os.getgid()}")
 PORT = os.environ.get("JELLYTRIM_E2E_PORT", "18096")
 BASE = f"http://localhost:{PORT}"
 CLIENT = 'MediaBrowser Client="jellytrim-e2e", Device="e2e", DeviceId="jellytrim-e2e", Version="1"'
