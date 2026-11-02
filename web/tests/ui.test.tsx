@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/pr
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, api } from '../src/api';
 import type { Shared } from '../src/app';
-import { Button, Dialog, ErrorState, Size } from '../src/components';
+import { Button, Dialog, ErrorState, MultiPick, Size } from '../src/components';
 import { CleanupView } from '../src/views/Cleanup';
 import { ExplorerView } from '../src/views/Explorer';
 import type { ExplorerRow, PlanDto } from '../src/types';
@@ -236,5 +236,29 @@ describe('api client', () => {
         vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('net')));
         await expect(api.status()).rejects.toMatchObject({ isOffline: true });
         vi.unstubAllGlobals();
+    });
+});
+
+describe('filter pickers', () => {
+    const pick = () => render(<div><MultiPick label="Library" options={[{ value: 'a', label: 'Movies' }]} selected={[]} onChange={vi.fn()} /><button>elsewhere</button></div>);
+    const details = () => screen.getByText('Library: all').closest('details') as HTMLDetailsElement;
+
+    it('closes when clicking outside, but not inside', () => {
+        pick();
+        details().open = true;
+        fireEvent.pointerDown(screen.getByText('Movies'));
+        expect(details().open).toBe(true);
+        fireEvent.pointerDown(screen.getByText('elsewhere'));
+        expect(details().open).toBe(false);
+    });
+
+    it('closes on Escape and when focus moves away', () => {
+        pick();
+        details().open = true;
+        fireEvent.keyDown(document, { key: 'Escape' });
+        expect(details().open).toBe(false);
+        details().open = true;
+        (screen.getByText('elsewhere') as HTMLButtonElement).focus();
+        expect(details().open).toBe(false);
     });
 });

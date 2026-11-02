@@ -182,10 +182,32 @@ export function CheckboxList({ legend, options, selected, onChange }: { legend: 
     );
 }
 
-/** A compact multi-select that opens in place. */
+/** A compact multi-select that opens in place. Clicking or focusing outside it, or pressing Escape, closes it. */
 export function MultiPick({ label, options, selected, onChange }: { label: string; options: { value: string; label: string; note?: string }[]; selected: string[]; onChange: (next: string[]) => void }) {
+    const ref = useRef<HTMLDetailsElement>(null);
+    useEffect(() => {
+        const outside = (e: Event) => {
+            const el = ref.current;
+            if (el?.open && e.target instanceof Node && !el.contains(e.target)) el.open = false;
+        };
+        const escape = (e: KeyboardEvent) => {
+            const el = ref.current;
+            if (e.key === 'Escape' && el?.open) {
+                el.open = false;
+                el.querySelector('summary')?.focus();
+            }
+        };
+        document.addEventListener('pointerdown', outside);
+        document.addEventListener('focusin', outside);
+        document.addEventListener('keydown', escape);
+        return () => {
+            document.removeEventListener('pointerdown', outside);
+            document.removeEventListener('focusin', outside);
+            document.removeEventListener('keydown', escape);
+        };
+    }, []);
     return (
-        <details class="jt-pick">
+        <details class="jt-pick" ref={ref}>
             <summary class="jt-input">{label}{selected.length > 0 ? `: ${selected.length}` : ': all'}</summary>
             <div class="jt-pick-menu"><CheckboxList legend={label} options={options} selected={selected} onChange={onChange} /></div>
         </details>
