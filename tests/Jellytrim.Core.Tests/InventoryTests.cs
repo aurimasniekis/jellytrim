@@ -331,6 +331,58 @@ public class ExplorerTests : IDisposable
     }
 
     [Fact]
+    public async Task Show_rows_report_each_users_episode_progress()
+    {
+        var (series, season, eps) = _rig.AddShow("Show", 1, 3);
+        _rig.MarkPlayedByAll(eps[0].Id);
+        _rig.MarkPlayedByAll(eps[1].Id);
+        _rig.MarkPlayed(eps[2].Id, TestRig.Ann, daysAgo: 5);
+        _rig.Host.States[(series.Id, TestRig.Bob)] = new UserItemState(WatchState.Unplayed, IsFavorite: true);
+        await _rig.ScanAsync();
+
+        var row = _rig.Explorer.Query(new ExplorerQuery { Kinds = [MediaKind.Series], UserIds = [TestRig.Ann, TestRig.Bob] }).Rows.Single();
+        var ann = row.UserStates.Single(s => s.UserId == TestRig.Ann);
+        var bob = row.UserStates.Single(s => s.UserId == TestRig.Bob);
+        Assert.Equal((WatchState.Played, 3, 3), (ann.State, ann.Episodes!.Played, ann.Episodes.Total));
+        Assert.Equal(_rig.Clock.Now.AddDays(-5), ann.LastPlayedUtc!.Value, TimeSpan.FromSeconds(1));
+        Assert.Equal((WatchState.Partial, 2, 3), (bob.State, bob.Episodes!.Played, bob.Episodes.Total));
+        Assert.True(bob.IsFavorite);
+
+        // The detail panel agrees, for the series and for its season.
+        foreach (var id in new[] { series.Id, season.Id })
+        {
+            var states = _rig.Inventory.GetItemStates(id);
+            Assert.Equal(WatchState.Played, states.Single(s => s.UserId == TestRig.Ann).State);
+            Assert.Equal((WatchState.Partial, 2), (states.Single(s => s.UserId == TestRig.Bob).State, states.Single(s => s.UserId == TestRig.Bob).Episodes!.Played));
+        }
+    }
+
+    [Fact]
+    public async Task A_rewatch_in_progress_keeps_a_finished_show_in_progress_and_nothing_watched_stays_unplayed()
+    {
+        var (_, _, eps) = _rig.AddShow("Show", 1, 2);
+        _rig.MarkPlayed(eps[0].Id, TestRig.Ann);
+        // A rewatch: the adapter turns Played plus a resume position into Partial (UserStateMerge).
+        _rig.Host.States[(eps[1].Id, TestRig.Ann)] = new UserItemState(WatchState.Partial, 500, 1);
+        await _rig.ScanAsync();
+        var row = _rig.Explorer.Query(new ExplorerQuery { Kinds = [MediaKind.Series], UserIds = [TestRig.Ann, TestRig.Bob] }).Rows.Single();
+        var ann = row.UserStates.Single(s => s.UserId == TestRig.Ann);
+        Assert.Equal((WatchState.Partial, 1, 1), (ann.State, ann.Episodes!.Played, ann.Episodes.InProgress));
+        var bob = row.UserStates.Single(s => s.UserId == TestRig.Bob);
+        Assert.Equal((WatchState.Unplayed, 0, 2), (bob.State, bob.Episodes!.Played, bob.Episodes.Total));
+        Assert.Null(bob.LastPlayedUtc);
+    }
+
+    [Fact]
+    public void Show_progress_is_unknown_when_nothing_is_known_watched_but_an_episode_could_not_be_read()
+    {
+        Assert.Equal(WatchState.Unknown, new EpisodeProgress(0, 0, 1, 3, null, 0).State);
+        Assert.Equal(WatchState.Partial, new EpisodeProgress(1, 0, 1, 3, null, 1).State);
+        Assert.Equal(WatchState.Played, new EpisodeProgress(3, 0, 0, 3, null, 3).State);
+        Assert.Equal(WatchState.Unplayed, new EpisodeProgress(0, 0, 0, 0, null, 0).State);
+    }
+
+    [Fact]
     public async Task Season_counts_as_played_only_when_every_episode_is()
     {
         var (_, season, eps) = _rig.AddShow("Show", 1, 2);

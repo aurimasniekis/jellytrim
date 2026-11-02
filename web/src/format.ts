@@ -47,6 +47,15 @@ export const daysAgoIso = (days: number, now = Date.now()) => new Date(now - day
 
 export const WATCH_LABEL: Record<WatchState, string> = { Played: 'Played', Partial: 'In progress', Unplayed: 'Unplayed', Unknown: 'Unknown' };
 
+/** Labels for a series or season, where the state is totalled from episodes. */
+export const SHOW_WATCH_LABEL: Record<WatchState, string> = { Played: 'Finished', Partial: 'Watching', Unplayed: 'Not started', Unknown: 'Unknown' };
+
+/** "7/12 episodes", plus how many are part-way and unreadable when there are any. */
+export function episodeProgress(p: { played: number; inProgress: number; unknown: number; total: number }): string {
+    const extra = [p.inProgress > 0 ? `${p.inProgress} in progress` : '', p.unknown > 0 ? `${p.unknown} unknown` : ''].filter(Boolean).join(', ');
+    return `${p.played}/${p.total} episodes${extra ? ` (${extra})` : ''}`;
+}
+
 export const OUTCOME_LABEL: Record<RuleOutcome, string> = { Pass: 'Allows', Block: 'Blocks', Unknown: 'Unknown, blocks', NotApplicable: 'Not applicable' };
 
 export const RULE_LABEL: Record<string, string> = {

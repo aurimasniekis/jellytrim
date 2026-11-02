@@ -50,6 +50,17 @@ describe('safety of what is displayed', () => {
         expect(screen.queryByText(/ann: Unplayed/)).toBeNull();
     });
 
+    it('shows each person\'s episode progress on a show', async () => {
+        const users = [{ id: 'u1', name: 'ann', isAdministrator: false, isDisabled: false, stateReadable: true }, { id: 'u2', name: 'bob', isAdministrator: false, isDisabled: false, stateReadable: true }];
+        vi.spyOn(api, 'queryItems').mockResolvedValue({ rows: [row({ kind: 'Series', name: 'Show', userStates: [
+            { userId: 'u1', state: 'Played', positionTicks: 0, playCount: 12, lastPlayedUtc: null, isFavorite: false, episodes: { played: 12, inProgress: 0, unknown: 0, total: 12 } },
+            { userId: 'u2', state: 'Partial', positionTicks: 0, playCount: 7, lastPlayedUtc: null, isFavorite: true, episodes: { played: 7, inProgress: 1, unknown: 0, total: 12 } },
+        ] })], total: 1, offset: 0, limit: 50 });
+        render(<ExplorerView shared={shared({ users, selectedUsers: ['u1', 'u2'] })} />);
+        expect(await screen.findByText('ann: Finished 12/12')).toBeTruthy();
+        expect(screen.getByText('bob: Watching 7/12 ★')).toBeTruthy();
+    });
+
     it('shows resume progress for in-progress items', async () => {
         vi.spyOn(api, 'queryItems').mockResolvedValue({ rows: [row({ userStates: [{ userId: 'u1', state: 'Partial', positionTicks: 25, playCount: 0, lastPlayedUtc: null, isFavorite: true }] })], total: 1, offset: 0, limit: 50 });
         render(<ExplorerView shared={shared()} />);

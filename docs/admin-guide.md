@@ -10,6 +10,17 @@ jellytrim appears in the dashboard drawer under **Plugins**.
 
 Nothing has been deleted, and nothing can be until you enable it.
 
+## Who has watched what
+
+In **Media explorer**, pick people under *Users in scope*. Each row shows a badge per person:
+
+| Row | Badge |
+|---|---|
+| Movie or episode | Played, In progress (with resume %), Unplayed, or Unknown |
+| Show or season | Finished, Watching or Not started, with episodes played, e.g. *Watching 7/12* |
+
+A show counts as finished only when every episode is played and none is part-way through, so a rewatch in progress shows as Watching. To list what someone finished, choose them alone, set *Type* to Shows and *Watch state* to Played; *In progress* lists what they started but haven't finished. The item panel has the same per-person table, including episodes in progress. All of this is as of the last scan.
+
 ## Reading the numbers
 
 | Term | Meaning |

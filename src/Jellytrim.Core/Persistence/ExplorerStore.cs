@@ -99,7 +99,8 @@ public sealed class ExplorerQuery
     }
 }
 
-public sealed record ExplorerUserState(Guid UserId, WatchState State, long PositionTicks, int PlayCount, DateTime? LastPlayedUtc, bool IsFavorite);
+/// <summary>For a series or season, <paramref name="Episodes"/> holds the user's progress and <paramref name="State"/> is derived from it.</summary>
+public sealed record ExplorerUserState(Guid UserId, WatchState State, long PositionTicks, int PlayCount, DateTime? LastPlayedUtc, bool IsFavorite, EpisodeProgress? Episodes = null);
 
 public sealed class ExplorerRow
 {
@@ -459,6 +460,9 @@ public sealed class ExplorerStore(JellytrimDb db)
             rows[(item, user)] = state;
         }
 
+        var containers = keyed.Where(k => k.Row.Kind is MediaKind.Series or MediaKind.Season).Select(k => k.Key).ToList();
+        var progress = EpisodeRollup.Load(c, containers, users.Where(u => u.Readable).Select(u => u.Key).ToList());
+
         foreach (var (key, row) in keyed)
         {
             row.UserStates = q.UserIds.Select(id =>
@@ -469,7 +473,11 @@ public sealed class ExplorerStore(JellytrimDb db)
                     return new ExplorerUserState(id, WatchState.Unknown, 0, 0, null, false);
                 }
 
-                return rows.TryGetValue((key, known.Key), out var s) ? s : new ExplorerUserState(id, WatchState.Unplayed, 0, 0, null, false);
+                var own = rows.TryGetValue((key, known.Key), out var s) ? s : new ExplorerUserState(id, WatchState.Unplayed, 0, 0, null, false);
+                // A container's own row carries only the favorite flag; its watch state comes from its episodes.
+                return progress.TryGetValue((key, known.Key), out var p)
+                    ? own with { State = p.State, PositionTicks = 0, PlayCount = p.PlayCount, LastPlayedUtc = p.LastPlayedUtc, Episodes = p }
+                    : own;
             }).ToList();
         }
     }

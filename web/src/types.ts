@@ -26,13 +26,15 @@ export interface SnapshotPoint { takenUtc: string; scopeId: string; scopeName: s
 export interface Trends { libraries: SnapshotPoint[]; volumes: SnapshotPoint[]; sinceUtc: string }
 
 export interface UserDto { id: string; name: string; isAdministrator: boolean; isDisabled: boolean; stateReadable: boolean }
-export interface ExplorerUserState { userId: string; state: WatchState; positionTicks: number; playCount: number; lastPlayedUtc: string | null; isFavorite: boolean }
+/** A user's progress through a series or season, totalled from its episodes. */
+export interface EpisodeProgress { played: number; inProgress: number; unknown: number; total: number }
+export interface ExplorerUserState { userId: string; state: WatchState; positionTicks: number; playCount: number; lastPlayedUtc: string | null; isFavorite: boolean; episodes?: EpisodeProgress | null }
 export interface ExplorerRow { id: string; kind: MediaKind; name: string; seriesName: string | null; seasonNumber: number | null; episodeNumber: number | null; libraryId: string; libraryName: string | null; seriesId: string | null; seasonId: string | null; logicalBytes: number; uniqueBytes: number; reclaimableBytes: number; fileCount: number; versionCount: number; dateAddedUtc: string | null; lastPlayedUtc: string | null; runtimeTicks: number | null; health: ItemHealth; protected: boolean; eligible: boolean | null; eligibleDescendants: number | null; totalDescendants: number | null; children: number | null; path: string | null; userStates: ExplorerUserState[] }
 export interface ExplorerPage { rows: ExplorerRow[]; total: number; offset: number; limit: number }
 export interface ExplorerQuery { libraryIds: string[]; kinds: MediaKind[]; parentId: string | null; search: string | null; minBytes: number | null; maxBytes: number | null; userIds: string[]; userMatch: UserMatch; watchState: WatchState | null; lastPlayedBeforeUtc: string | null; lastPlayedAfterUtc: string | null; addedBeforeUtc: string | null; addedAfterUtc: string | null; protected: boolean | null; policyId: string | null; eligible: boolean | null; sort: ExplorerSort; descending: boolean; offset: number; limit: number }
 
 export interface ItemFileRow { path: string; role: FileRole; versionId: string; identity: string | null; volumeId: string | null; size: number; allocated: number; linkCount: number; mtimeNs: number; status: string; observedUtc: string; otherItemReferences: number }
-export interface ItemStateRow { userId: string; userName: string; state: WatchState; positionTicks: number; playCount: number; lastPlayedUtc: string | null; isFavorite: boolean }
+export interface ItemStateRow { userId: string; userName: string; state: WatchState; positionTicks: number; playCount: number; lastPlayedUtc: string | null; isFavorite: boolean; episodes?: EpisodeProgress | null }
 export interface Protection { targetId: string; targetType: 'Item' | 'Library'; name: string; note: string | null; createdAtUtc: string; createdBy: string | null }
 export interface RuleEvaluation { ruleId: string; kind: RuleKind; outcome: RuleOutcome; message: string }
 export interface ItemEvaluation { itemId: string; eligible: boolean; rules: RuleEvaluation[] }

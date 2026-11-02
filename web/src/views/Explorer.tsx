@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api } from '../api';
 import type { Shared } from '../app';
 import { Alert, Badge, Button, Card, Dialog, Empty, ErrorState, Field, Loading, MultiPick, NumberInput, Pager, Size, useAsync } from '../components';
-import { OUTCOME_LABEL, WATCH_LABEL, bytes, date, dateTime, daysAgoIso, episodeCode, exactBytes, gibToBytes, resumePercent, ruleLabel } from '../format';
+import { OUTCOME_LABEL, SHOW_WATCH_LABEL, WATCH_LABEL, bytes, date, dateTime, daysAgoIso, episodeCode, episodeProgress, exactBytes, gibToBytes, resumePercent, ruleLabel } from '../format';
 import type { ExplorerQuery, ExplorerRow, ExplorerSort, ItemHealth, MediaKind, UserMatch, WatchState } from '../types';
 
 const PAGE = 50;
@@ -231,12 +231,15 @@ export function ExplorerView({ shared }: { shared: Shared }) {
 }
 
 function UserStates({ row, shared }: { row: ExplorerRow; shared: Shared }) {
-    if (row.kind === 'Series' || row.kind === 'Season') return <span class="jt-small jt-muted">Open to see episodes</span>;
     if (row.userStates.length === 0) return <span class="jt-small jt-muted">No users selected</span>;
     return (
         <div class="jt-small">
             {row.userStates.map(s => {
                 const name = shared.users.find(u => u.id === s.userId)?.name ?? 'Unknown user';
+                if (s.episodes) {
+                    const p = s.episodes;
+                    return <span key={s.userId}><Badge tone={WATCH_TONE[s.state]}>{name}: {SHOW_WATCH_LABEL[s.state]}{s.state === 'Unknown' ? '' : ` ${p.played}/${p.total}`}{s.isFavorite ? ' ★' : ''}</Badge>{' '}</span>;
+                }
                 const percent = resumePercent(s.positionTicks, row.runtimeTicks);
                 return <span key={s.userId}><Badge tone={WATCH_TONE[s.state]}>{name}: {WATCH_LABEL[s.state]}{s.state === 'Partial' && percent !== null ? ` ${percent}%` : ''}{s.isFavorite ? ' ★' : ''}</Badge>{' '}</span>;
             })}
@@ -295,13 +298,13 @@ function ItemPanel({ id, shared, onClose, onChanged }: { id: string; shared: Sha
                     <h3>Per-user state</h3>
                     <div class="jt-table-wrap">
                         <table class="jt-table">
-                            <thead><tr><th scope="col">User</th><th scope="col">State</th><th scope="col">Resume</th><th scope="col">Last played</th><th scope="col" class="jt-right">Plays</th><th scope="col">Favorite</th></tr></thead>
+                            <thead><tr><th scope="col">User</th><th scope="col">State</th><th scope="col">Progress</th><th scope="col">Last played</th><th scope="col" class="jt-right">Plays</th><th scope="col">Favorite</th></tr></thead>
                             <tbody>
                                 {d.userStates.map(s => (
                                     <tr key={s.userId}>
                                         <td>{s.userName}</td>
-                                        <td><Badge tone={WATCH_TONE[s.state]}>{WATCH_LABEL[s.state]}</Badge></td>
-                                        <td class="jt-small">{s.state === 'Partial' ? `${resumePercent(s.positionTicks, d.item.runtimeTicks) ?? '?'}%` : '—'}</td>
+                                        <td><Badge tone={WATCH_TONE[s.state]}>{s.episodes ? SHOW_WATCH_LABEL[s.state] : WATCH_LABEL[s.state]}</Badge></td>
+                                        <td class="jt-small">{s.episodes ? (s.state === 'Unknown' ? '—' : episodeProgress(s.episodes)) : s.state === 'Partial' ? `${resumePercent(s.positionTicks, d.item.runtimeTicks) ?? '?'}%` : '—'}</td>
                                         <td class="jt-small">{dateTime(s.lastPlayedUtc)}</td>
                                         <td class="jt-right jt-num">{s.state === 'Unknown' ? '—' : s.playCount}</td>
                                         <td>{s.isFavorite ? '★ Yes' : s.state === 'Unknown' ? '—' : 'No'}</td>

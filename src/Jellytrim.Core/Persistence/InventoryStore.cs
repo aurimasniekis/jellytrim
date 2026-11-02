@@ -22,7 +22,7 @@ public sealed record ScanRow(long Id, long Generation, string Trigger, string St
 
 public sealed record ItemFileRow(string Path, FileRole Role, Guid VersionId, string? Identity, string? VolumeId, long Size, long Allocated, int LinkCount, long MtimeNs, ProbeStatus Status, DateTime ObservedUtc, int OtherItemReferences);
 
-public sealed record ItemStateRow(Guid UserId, string UserName, WatchState State, long PositionTicks, int PlayCount, DateTime? LastPlayedUtc, bool IsFavorite);
+public sealed record ItemStateRow(Guid UserId, string UserName, WatchState State, long PositionTicks, int PlayCount, DateTime? LastPlayedUtc, bool IsFavorite, EpisodeProgress? Episodes = null);
 
 public sealed record SnapshotPoint(DateTime TakenUtc, string ScopeId, string ScopeName, long LogicalBytes, long UniqueBytes, long AllocatedBytes, long? FreeBytes, long? TotalBytes);
 
@@ -393,12 +393,25 @@ public sealed class InventoryStore(JellytrimDb db)
             .Rows(r => new ItemFileRow(r.GetString(0), (FileRole)r.GetInt32(1), Guid.Parse(r.GetString(2)), Db.Str(r, 3), Db.Str(r, 4), r.GetInt64(5), r.GetInt64(6), r.GetInt32(7), r.GetInt64(8), (ProbeStatus)r.GetInt32(9), Db.Date(r, 10)!.Value, r.GetInt32(11))));
 
     public IReadOnlyList<ItemStateRow> GetItemStates(Guid itemId) => db.Read(c =>
-        c.Cmd("""
-            SELECT u.user_id,u.name,CASE WHEN u.readable_generation=0 THEN 3 ELSE COALESCE(s.state,0) END,COALESCE(s.position_ticks,0),COALESCE(s.play_count,0),s.last_played,COALESCE(s.favorite,0)
-            FROM users u LEFT JOIN item_user_state s ON s.user_key=u.user_key AND s.item_key=(SELECT item_key FROM items WHERE item_id=$i)
+    {
+        var item = c.Cmd("SELECT item_key,kind FROM items WHERE item_id=$i").With("$i", Db.Id(itemId)).Rows(r => (Key: r.GetInt64(0), Kind: (MediaKind)r.GetInt32(1))).FirstOrDefault();
+        var rows = c.Cmd("""
+            SELECT u.user_id,u.name,CASE WHEN u.readable_generation=0 THEN 3 ELSE COALESCE(s.state,0) END,COALESCE(s.position_ticks,0),COALESCE(s.play_count,0),s.last_played,COALESCE(s.favorite,0),u.user_key,u.readable_generation>0
+            FROM users u LEFT JOIN item_user_state s ON s.user_key=u.user_key AND s.item_key=$k
             WHERE u.deleted=0 ORDER BY u.name COLLATE NOCASE
-            """).With("$i", Db.Id(itemId))
-            .Rows(r => new ItemStateRow(Guid.Parse(r.GetString(0)), r.GetString(1), (WatchState)r.GetInt32(2), r.GetInt64(3), r.GetInt32(4), Db.Date(r, 5), r.GetBoolean(6))));
+            """).With("$k", item.Key)
+            .Rows(r => (Row: new ItemStateRow(Guid.Parse(r.GetString(0)), r.GetString(1), (WatchState)r.GetInt32(2), r.GetInt64(3), r.GetInt32(4), Db.Date(r, 5), r.GetBoolean(6)), UserKey: r.GetInt64(7), Readable: r.GetBoolean(8)));
+        if (item.Kind is not (MediaKind.Series or MediaKind.Season))
+        {
+            return rows.Select(r => r.Row).ToList();
+        }
+
+        // A container's own row carries only the favorite flag; its watch state comes from its episodes.
+        var progress = EpisodeRollup.Load(c, [item.Key], rows.Where(r => r.Readable).Select(r => r.UserKey).ToList());
+        return rows.Select(r => progress.TryGetValue((item.Key, r.UserKey), out var p)
+            ? r.Row with { State = p.State, PositionTicks = 0, PlayCount = p.PlayCount, LastPlayedUtc = p.LastPlayedUtc, Episodes = p }
+            : r.Row).ToList();
+    });
 
     /// <summary>Other indexed media paths in a directory, so a neighbor's sidecars are never claimed.</summary>
     public IReadOnlyList<string> MediaPathsInDirectory(string directory) => db.Read(c =>
